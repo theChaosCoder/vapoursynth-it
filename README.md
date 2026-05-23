@@ -123,10 +123,29 @@ Cross-compile produces:
 
 ## Installation
 
-Copy `libzit.so` / `libzit.dylib` / `zit.dll` into a VapourSynth plugin
-directory (typically `/usr/local/lib/vapoursynth/` on Linux,
-`~/Library/ApplicationSupport/VapourSynth/plugins/` on macOS, the
-`vapoursynth64/plugins/` directory next to `vsedit.exe` on Windows).
+### Via pip (recommended)
+
+```bash
+pip install vapoursynth-zit
+```
+
+The wheel installs the platform-matched binary into VapourSynth's
+auto-discovery path (`site-packages/vapoursynth/plugins/`), so
+`core.zit.IT(...)` is available without any further `LoadPlugin`
+calls.
+
+Pre-built wheels are available for Linux (x86_64, aarch64), macOS
+(x86_64, aarch64), and Windows (x86_64).
+
+### Manual install (zip from a release)
+
+If you'd rather not pull in pip, grab the matching `*.zip` from the
+[Releases page](https://github.com/theChaosCoder/vapoursynth-it/releases)
+and drop the binary into a VapourSynth plugin directory:
+
+* Linux: `/usr/local/lib/vapoursynth/`
+* macOS: `~/Library/ApplicationSupport/VapourSynth/plugins/`
+* Windows: `vapoursynth64/plugins/` next to `vsedit.exe`
 
 ## Performance
 

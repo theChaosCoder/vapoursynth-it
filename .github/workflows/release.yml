@@ -4,11 +4,14 @@ name: Release
 #
 # 1. `push: tags: v*.*.*` — the canonical path. Push an annotated tag
 #    matching the SemVer pattern and the workflow builds the five
-#    platform zips and creates / replaces the GitHub release.
+#    platform zips, attaches them to a GitHub release, and publishes
+#    the platform-tagged wheels to PyPI.
 #
 # 2. `workflow_dispatch` — manual re-run against an existing tag.
 #    Useful when you want to regenerate assets without bumping the
-#    tag (e.g. fixing a typo in CHANGELOG.md).
+#    tag (e.g. fixing a typo in CHANGELOG.md). Note that PyPI does
+#    NOT allow re-uploading an existing version, so the publish-pypi
+#    job will simply fail-soft if the version is already there.
 on:
   push:
     tags:
@@ -19,16 +22,17 @@ on:
         description: "Existing tag to release against (e.g. v1.3.0)"
         required: true
 
-permissions:
-  contents: write
-
 env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
   build-and-release:
-    name: Build and publish release
+    name: Build + GitHub release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
 
     steps:
       - name: Resolve target tag
@@ -52,14 +56,19 @@ jobs:
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
           echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Cross-compile (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64)
         run: zig build cross
 
-      - name: Stage release artefacts
+      - name: Stage GitHub-release zips
         run: |
           set -euo pipefail
           TAG='${{ steps.tag.outputs.tag }}'
-          mkdir -p dist
+          mkdir -p dist-zips
 
           make_zip() {
             local plat="$1" bin="$2" prefix="$3"
@@ -78,7 +87,7 @@ jobs:
           Full docs:  https://github.com/${{ github.repository }}
           License:    GPL-2.0-or-later (see LICENSE)
           EOF
-            ( cd "$stage" && zip -q "../../dist/$prefix-$plat-$TAG.zip" "$bin" LICENSE README.txt )
+            ( cd "$stage" && zip -q "../../dist-zips/$prefix-$plat-$TAG.zip" "$bin" LICENSE README.txt )
           }
 
           make_zip linux-x86_64    libzit.so     libzit
@@ -87,7 +96,19 @@ jobs:
           make_zip macos-aarch64   libzit.dylib  libzit
           make_zip windows-x86_64  zit.dll       zit
 
-          ls -la dist/
+          ls -la dist-zips/
+
+      - name: Build PyPI wheels
+        # Same `zig build cross` output that fed the zips above is now
+        # repacked into PEP 427 wheels by scripts/build_pypi_wheels.py.
+        run: python scripts/build_pypi_wheels.py
+
+      - name: Upload PyPI wheels as workflow artifact (for publish-pypi job)
+        uses: actions/upload-artifact@v5
+        with:
+          name: pypi-wheels
+          path: dist/*.whl
+          if-no-files-found: error
 
       - name: Publish GitHub release
         env:
@@ -102,11 +123,46 @@ jobs:
             for old in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
               gh release delete-asset "$TAG" "$old" --yes
             done
-            gh release upload "$TAG" dist/*.zip
+            gh release upload "$TAG" dist-zips/*.zip
             gh release edit "$TAG" --notes-file CHANGELOG.md
           else
             gh release create "$TAG" \
               --title "$TAG — initial Zig port" \
               --notes-file CHANGELOG.md \
-              dist/*.zip
+              dist-zips/*.zip
           fi
+
+  publish-pypi:
+    name: Publish wheels to PyPI
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    # GitHub-side gate. Setting up a `pypi` Environment in the repo
+    # settings gives you the optional review step + a clean audit
+    # trail. The job won't run until the environment exists.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/vapoursynth-zit
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC). No API token
+      # needs to live in repo secrets.
+      id-token: write
+
+    steps:
+      - name: Download wheels from build job
+        uses: actions/download-artifact@v5
+        with:
+          name: pypi-wheels
+          path: dist/
+
+      - name: List wheels
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # PyPI rejects re-uploads of an existing version. When a manual
+          # workflow_dispatch retries a release whose version is already
+          # on PyPI, this flag turns the rejection into a warning instead
+          # of a hard failure, keeping the rest of the workflow green.
+          skip-existing: true

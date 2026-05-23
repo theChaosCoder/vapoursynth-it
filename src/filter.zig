@@ -355,15 +355,24 @@ fn getFrame(
         getFrameSub(inst, api, ctx, n);
     }
 
-    const dst_opt = api.newVideoFrame.?(&inst.vi.format, inst.vi.width, inst.vi.height, null, core);
+    // Fetch the chosen source frame ONCE for prop inheritance. Cached, so
+    // the subsequent getFrameFilter calls inside makeOutput are free.
+    const src_for_props = api.getFrameFilter.?(plane.clipFrame(input_n, inst.max_frames), inst.node, ctx);
+    defer api.freeFrame.?(src_for_props);
+
+    const dst_opt = api.newVideoFrame.?(&inst.vi.format, inst.vi.width, inst.vi.height, src_for_props, core);
     if (dst_opt == null) return null;
     const dst = dst_opt.?;
 
+    var was_blended = false;
     if (inst.fps == 24 and shouldBlendBlock(inst, base24)) {
         blendInto(inst, api, ctx, core, dst, base24, tf24);
+        was_blended = true;
     } else {
         makeOutput(inst, api, ctx, dst, input_n);
     }
+
+    setOutputProps(inst, api, dst, input_n, was_blended);
     return dst;
 }
 
@@ -405,6 +414,62 @@ fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_
             api.requestFrameFilter.?(clipped, inst.node, ctx);
         }
     }
+}
+
+/// Writes the standard `_FieldBased`/`_Combed`/`_Duration*` props plus our
+/// diagnostic `IT.*` props onto the output frame. The frame already inherited
+/// the source's full prop set via newVideoFrame's `propSrc` argument; here
+/// we override the ones IT actually changes the semantics of, and add the
+/// custom inspection props.
+///
+/// Conventions:
+///   * `_FieldBased = 0`  — output is always progressive after IVTC.
+///   * `_Combed = 1`      — when the frame was still classified ip='I' and
+///                          went through the deinterlacer.
+///   * `_Combed = 0`      — when ip='P' (clean field match).
+///   * `_DurationNum/Den` — taken from the *output* fpsNum/fpsDen.
+///   * `IT.Match`         — 'C'/'P'/'N' (or lowercase 'c'/'p'/'n' for
+///                          weakly-confident matches) the algorithm chose.
+///   * `IT.Mflag`         — single-char decimation code in fps=24 mode
+///                          ('D'/'d'/'x'/'y'/'z'/'+'/'.'). 'U' if not run.
+///   * `IT.IpFlag`        — 'P' or 'I'.
+///   * `IT.Iv{C,P,N,M}`   — interlace-evidence counters from EvalIV.
+///   * `IT.Diff{P0,P1,S0,S1}` — motion stats for the input frame.
+///   * `IT.Blended`       — 1 when the blend code path produced this frame.
+fn setOutputProps(inst: *Filter, api: c.VSAPI, dst: *c.VSFrame, input_n: i32, was_blended: bool) void {
+    const props_opt = api.getFramePropertiesRW.?(dst);
+    if (props_opt == null) return;
+    const props = props_opt.?;
+    const fi = &inst.frame_info[@intCast(input_n)];
+
+    // Standard VS props
+    _ = api.mapSetInt.?(props, "_FieldBased", 0, c.maReplace);
+    const combed: i64 = if (fi.ip == 'I') 1 else 0;
+    _ = api.mapSetInt.?(props, "_Combed", combed, c.maReplace);
+    _ = api.mapSetInt.?(props, "_DurationNum", inst.vi.fpsDen, c.maReplace);
+    _ = api.mapSetInt.?(props, "_DurationDen", inst.vi.fpsNum, c.maReplace);
+
+    // Single-character diagnostic props (UTF-8 strings of length 1).
+    setChar(api, props, "ITMatch", fi.match);
+    setChar(api, props, "ITMflag", fi.mflag);
+    setChar(api, props, "ITIpFlag", fi.ip);
+
+    _ = api.mapSetInt.?(props, "ITIvC", fi.ivC, c.maReplace);
+    _ = api.mapSetInt.?(props, "ITIvP", fi.ivP, c.maReplace);
+    _ = api.mapSetInt.?(props, "ITIvN", fi.ivN, c.maReplace);
+    _ = api.mapSetInt.?(props, "ITIvM", fi.ivM, c.maReplace);
+
+    _ = api.mapSetInt.?(props, "ITDiffP0", fi.diffP0, c.maReplace);
+    _ = api.mapSetInt.?(props, "ITDiffP1", fi.diffP1, c.maReplace);
+    _ = api.mapSetInt.?(props, "ITDiffS0", fi.diffS0, c.maReplace);
+    _ = api.mapSetInt.?(props, "ITDiffS1", fi.diffS1, c.maReplace);
+
+    _ = api.mapSetInt.?(props, "ITBlended", @intFromBool(was_blended), c.maReplace);
+}
+
+inline fn setChar(api: c.VSAPI, props: *c.VSMap, key: [*:0]const u8, ch: u8) void {
+    const buf = [_]u8{ch};
+    _ = api.mapSetData.?(props, key, &buf, 1, c.dtUtf8, c.maReplace);
 }
 
 /// Returns true if `blend=true` actually triggers blending for this 5-frame

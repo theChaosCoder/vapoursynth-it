@@ -88,6 +88,61 @@ def test_output_format_matches_input(core, fixtures):
     assert out.height == src.height
 
 
+# ---------------------------------------------------------------------------
+# Frame properties
+# ---------------------------------------------------------------------------
+
+def test_standard_frame_props_progressive(core, fixtures):
+    """After IVTC the output is progressive: _FieldBased must be 0, and the
+    duration must reflect the output (not input) framerate."""
+    src = fixtures["constant_color"]()
+    out = core.zit.IT(src, fps=24)
+    f = out.get_frame(0)
+    p = dict(f.props)
+    assert p["_FieldBased"] == 0, "output of IVTC must be marked progressive"
+    # fps=24 -> 24000/1001, so duration = 1001/24000 sec per frame
+    assert p["_DurationNum"] == 1001
+    assert p["_DurationDen"] == 24000
+
+
+def test_combed_flag_set_per_frame(core, fixtures):
+    """`_Combed` reflects the algorithm's ip='P'/'I' classification per frame."""
+    src = fixtures["constant_color"]()
+    out = core.zit.IT(src)
+    # Constant clip -> every frame ip='P', so _Combed=0.
+    for n in range(out.num_frames):
+        assert out.get_frame(n).props["_Combed"] == 0
+
+
+def test_source_props_are_inherited(core, fixtures):
+    """Source-side metadata (`_SARNum`, `_Matrix`, etc.) must survive the filter."""
+    src = fixtures["constant_color"]()
+    src_with_meta = core.std.SetFrameProp(src, prop="_SARNum", intval=1)
+    src_with_meta = core.std.SetFrameProp(src_with_meta, prop="_SARDen", intval=1)
+    src_with_meta = core.std.SetFrameProp(src_with_meta, prop="_Matrix", intval=6)
+    out = core.zit.IT(src_with_meta)
+    p = dict(out.get_frame(0).props)
+    assert p.get("_SARNum") == 1
+    assert p.get("_SARDen") == 1
+    assert p.get("_Matrix") == 6
+
+
+def test_it_diagnostic_props_present(core, fixtures):
+    """The custom `IT*` diagnostic props must be set on every output frame."""
+    src = fixtures["two_frame_telecine"]()
+    out = core.zit.IT(src, fps=24)
+    p = dict(out.get_frame(0).props)
+    for key in ("ITMatch", "ITMflag", "ITIpFlag", "ITIvC", "ITIvP", "ITIvN",
+                "ITIvM", "ITDiffP0", "ITDiffP1", "ITDiffS0", "ITDiffS1",
+                "ITBlended"):
+        assert key in p, f"missing diagnostic prop: {key}"
+    # Char-typed props are auto-decoded by the VS Python wrapper.
+    def _to_str(v):
+        return v.decode("utf8") if isinstance(v, (bytes, bytearray)) else v
+    assert _to_str(p["ITMatch"]) in {"C", "P", "N", "c", "p", "n", "U"}
+    assert _to_str(p["ITIpFlag"]) in {"P", "I", "U"}
+
+
 def test_determinism_same_clip_twice(core, fixtures):
     src = fixtures["two_frame_telecine"]()
     out_a = core.zit.IT(src, fps=24)

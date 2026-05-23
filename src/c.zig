@@ -54,3 +54,9 @@ pub const rpNoFrameReuse = _c.rpNoFrameReuse;
 pub const arInitial = _c.arInitial;
 pub const arAllFramesReady = _c.arAllFramesReady;
 pub const arError = _c.arError;
+
+// Map / property helpers
+pub const maReplace = _c.maReplace;
+pub const maAppend = _c.maAppend;
+pub const dtUtf8 = _c.dtUtf8;
+pub const dtBinary = _c.dtBinary;

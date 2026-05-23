@@ -15,8 +15,10 @@ inline fn absDiffI(a: u8, b: u8) i32 {
 pub fn checkSceneChange(
     width: i32,
     height: i32,
-    prev_y: [*]const u8, prev_stride: usize,
-    curr_y: [*]const u8, curr_stride: usize,
+    prev_y: [*]const u8,
+    prev_stride: usize,
+    curr_y: [*]const u8,
+    curr_stride: usize,
 ) bool {
     _ = width;
     // Upstream iterates `x < rowSize = vsapi->getStride(srcC, 0)` here, i.e.
@@ -38,9 +40,7 @@ pub fn checkSceneChange(
             const d = simd.absDiff(LANES, c, p);
             const mask: @Vector(LANES, bool) = d > threshold_vec;
             // Sum the count of true lanes.
-            const ones: @Vector(LANES, u8) = @select(u8, mask,
-                @as(@Vector(LANES, u8), @splat(1)),
-                @as(@Vector(LANES, u8), @splat(0)));
+            const ones: @Vector(LANES, u8) = @select(u8, mask, @as(@Vector(LANES, u8), @splat(1)), @as(@Vector(LANES, u8), @splat(0)));
             sum += @reduce(.Add, @as(@Vector(LANES, u16), ones));
         }
         while (x < stride_u) : (x += 1) {

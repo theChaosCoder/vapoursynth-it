@@ -27,15 +27,24 @@ inline fn makeMotionMap2Common(
     height: i32,
     even_rows_only: bool,
     dst: []u8,
-    prev_y: [*]const u8, prev_y_stride: usize,
-    prev_u: [*]const u8, prev_u_stride: usize,
-    prev_v: [*]const u8, prev_v_stride: usize,
-    curr_y: [*]const u8, curr_y_stride: usize,
-    curr_u: [*]const u8, curr_u_stride: usize,
-    curr_v: [*]const u8, curr_v_stride: usize,
-    next_y: [*]const u8, next_y_stride: usize,
-    next_u: [*]const u8, next_u_stride: usize,
-    next_v: [*]const u8, next_v_stride: usize,
+    prev_y: [*]const u8,
+    prev_y_stride: usize,
+    prev_u: [*]const u8,
+    prev_u_stride: usize,
+    prev_v: [*]const u8,
+    prev_v_stride: usize,
+    curr_y: [*]const u8,
+    curr_y_stride: usize,
+    curr_u: [*]const u8,
+    curr_u_stride: usize,
+    curr_v: [*]const u8,
+    curr_v_stride: usize,
+    next_y: [*]const u8,
+    next_y_stride: usize,
+    next_u: [*]const u8,
+    next_u_stride: usize,
+    next_v: [*]const u8,
+    next_v_stride: usize,
 ) void {
     const w: usize = @intCast(width);
     const twidth: usize = @intCast(@divTrunc(width, 2));
@@ -124,8 +133,10 @@ pub const MotionStats = struct {
 pub fn makeMotionMap(
     width: i32,
     height: i32,
-    prev_y: [*]const u8, prev_y_stride: usize,
-    curr_y: [*]const u8, curr_y_stride: usize,
+    prev_y: [*]const u8,
+    prev_y_stride: usize,
+    curr_y: [*]const u8,
+    curr_y_stride: usize,
 ) MotionStats {
     std.debug.assert(width <= MAX_WIDTH);
     const w: usize = @intCast(width);
@@ -173,7 +184,7 @@ pub fn makeMotionMap(
             var uii: usize = @intCast(ii);
             while (uii + LANES <= widthminus8_u) : (uii += LANES) {
                 const A: @Vector(LANES, i16) = bufP0[uii - 1 ..][0..LANES].*;
-                const B: @Vector(LANES, i16) = bufP0[uii ..][0..LANES].*;
+                const B: @Vector(LANES, i16) = bufP0[uii..][0..LANES].*;
                 const C: @Vector(LANES, i16) = bufP0[uii + 1 ..][0..LANES].*;
                 const delta_signed = A + C - two * B;
                 const delta_abs = @select(i16, delta_signed < zero16, -delta_signed, delta_signed);
@@ -217,7 +228,7 @@ pub fn makeMotionMap(
             while (uii + LANES <= widthminus16_u) : (uii += LANES) {
                 const A: @Vector(LANES, u8) = bufP1[uii - 1 ..][0..LANES].*;
                 const B: @Vector(LANES, u8) = bufP1[uii + 1 ..][0..LANES].*;
-                const C: @Vector(LANES, u8) = bufP1[uii ..][0..LANES].*;
+                const C: @Vector(LANES, u8) = bufP1[uii..][0..LANES].*;
                 const ABC: @Vector(LANES, u16) =
                     @as(@Vector(LANES, u16), A) +
                     @as(@Vector(LANES, u16), B) +
@@ -267,21 +278,27 @@ pub fn makeMotionMap2Min(
     width: i32,
     height: i32,
     dst: []u8,
-    prev_y: [*]const u8, prev_y_stride: usize,
-    prev_u: [*]const u8, prev_u_stride: usize,
-    prev_v: [*]const u8, prev_v_stride: usize,
-    curr_y: [*]const u8, curr_y_stride: usize,
-    curr_u: [*]const u8, curr_u_stride: usize,
-    curr_v: [*]const u8, curr_v_stride: usize,
-    next_y: [*]const u8, next_y_stride: usize,
-    next_u: [*]const u8, next_u_stride: usize,
-    next_v: [*]const u8, next_v_stride: usize,
+    prev_y: [*]const u8,
+    prev_y_stride: usize,
+    prev_u: [*]const u8,
+    prev_u_stride: usize,
+    prev_v: [*]const u8,
+    prev_v_stride: usize,
+    curr_y: [*]const u8,
+    curr_y_stride: usize,
+    curr_u: [*]const u8,
+    curr_u_stride: usize,
+    curr_v: [*]const u8,
+    curr_v_stride: usize,
+    next_y: [*]const u8,
+    next_y_stride: usize,
+    next_u: [*]const u8,
+    next_u_stride: usize,
+    next_v: [*]const u8,
+    next_v_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    makeMotionMap2Common(false, width, height, true, dst,
-        prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride,
-        curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride,
-        next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
+    makeMotionMap2Common(false, width, height, true, dst, prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride, curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride, next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
 }
 
 /// MakeMotionMap2Max_YV12 — max per-pixel motion between (prev, curr) and
@@ -291,21 +308,27 @@ pub fn makeMotionMap2Max(
     width: i32,
     height: i32,
     dst: []u8,
-    prev_y: [*]const u8, prev_y_stride: usize,
-    prev_u: [*]const u8, prev_u_stride: usize,
-    prev_v: [*]const u8, prev_v_stride: usize,
-    curr_y: [*]const u8, curr_y_stride: usize,
-    curr_u: [*]const u8, curr_u_stride: usize,
-    curr_v: [*]const u8, curr_v_stride: usize,
-    next_y: [*]const u8, next_y_stride: usize,
-    next_u: [*]const u8, next_u_stride: usize,
-    next_v: [*]const u8, next_v_stride: usize,
+    prev_y: [*]const u8,
+    prev_y_stride: usize,
+    prev_u: [*]const u8,
+    prev_u_stride: usize,
+    prev_v: [*]const u8,
+    prev_v_stride: usize,
+    curr_y: [*]const u8,
+    curr_y_stride: usize,
+    curr_u: [*]const u8,
+    curr_u_stride: usize,
+    curr_v: [*]const u8,
+    curr_v_stride: usize,
+    next_y: [*]const u8,
+    next_y_stride: usize,
+    next_u: [*]const u8,
+    next_u_stride: usize,
+    next_v: [*]const u8,
+    next_v_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    makeMotionMap2Common(true, width, height, false, dst,
-        prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride,
-        curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride,
-        next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
+    makeMotionMap2Common(true, width, height, false, dst, prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride, curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride, next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
 }
 
 /// MakeSimpleBlurMap_YV12 — computes a "did the line need to be interpolated"
@@ -315,8 +338,10 @@ pub fn makeSimpleBlurMap(
     width: i32,
     height: i32,
     dst: []u8,
-    curr_y: [*]const u8, curr_y_stride: usize,
-    ref_y: [*]const u8, ref_y_stride: usize,
+    curr_y: [*]const u8,
+    curr_y_stride: usize,
+    ref_y: [*]const u8,
+    ref_y_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
     const w: usize = @intCast(width);
@@ -423,10 +448,7 @@ test "makeMotionMap2Max: identical frames yield zero map" {
     @memset(vp, 100);
     @memset(dst, 0xFF);
 
-    makeMotionMap2Max(width, height, dst,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    makeMotionMap2Max(width, height, dst, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
     for (dst) |x| try std.testing.expectEqual(@as(u8, 0), x);
 }

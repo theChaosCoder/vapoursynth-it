@@ -40,15 +40,21 @@ const MAX_WIDTH = 8192;
 
 /// Frame view: three plane pointers + strides extracted from a VSFrame.
 const FrameView = struct {
-    y: [*]const u8, y_stride: usize,
-    u: [*]const u8, u_stride: usize,
-    v: [*]const u8, v_stride: usize,
+    y: [*]const u8,
+    y_stride: usize,
+    u: [*]const u8,
+    u_stride: usize,
+    v: [*]const u8,
+    v_stride: usize,
 };
 
 const FrameViewMut = struct {
-    y: [*]u8, y_stride: usize,
-    u: [*]u8, u_stride: usize,
-    v: [*]u8, v_stride: usize,
+    y: [*]u8,
+    y_stride: usize,
+    u: [*]u8,
+    u_stride: usize,
+    v: [*]u8,
+    v_stride: usize,
 };
 
 fn viewOf(api: c.VSAPI, frame: *const c.VSFrame) FrameView {
@@ -514,16 +520,27 @@ fn blendInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, core: ?*c.VSCo
         makeOutput(inst, api, ctx, tmp, fno);
         const v = viewOfMut(api, tmp);
         srcs[z] = .{
-            .y = v.y, .y_stride = v.y_stride,
-            .u = v.u, .u_stride = v.u_stride,
-            .v = v.v, .v_stride = v.v_stride,
+            .y = v.y,
+            .y_stride = v.y_stride,
+            .u = v.u,
+            .u_stride = v.u_stride,
+            .v = v.v,
+            .v_stride = v.v_stride,
         };
     }
 
     const vD = viewOfMut(api, dst);
     blend_mod.blendFrames(
-        inst.width, inst.height, kernel, srcs[0..size],
-        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
+        inst.width,
+        inst.height,
+        kernel,
+        srcs[0..size],
+        vD.y,
+        vD.y_stride,
+        vD.u,
+        vD.u_stride,
+        vD.v,
+        vD.v_stride,
     );
 }
 
@@ -625,14 +642,11 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
 
     // Even rows of edge map: from srcC at offset 0.
     @memset(inst.call_state.edgeMap, 0);
-    edge_mod.makeDeMap(inst.width, inst.height, 0, inst.call_state.edgeMap,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
+    edge_mod.makeDeMap(inst.width, inst.height, 0, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
 
     // Always evaluate against C (gives us iSumC / iSumPC, the "intrinsic"
     // interlace evidence of the current frame).
-    const ev_c = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
-        inst.call_state.edgeMap,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,  // src = C
+    const ev_c = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, // src = C
         vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride); // ref = C
     inst.call_state.iSumC = ev_c.counter;
     inst.call_state.iSumPC = ev_c.counterp;
@@ -642,10 +656,7 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
         const srcN = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
         defer api.freeFrame.?(srcN);
         const vN = viewOf(api, srcN.?);
-        const ev_n = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
-            inst.call_state.edgeMap,
-            vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-            vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+        const ev_n = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
         inst.call_state.iSumN = ev_n.counter;
         inst.call_state.iSumPN = ev_n.counterp;
     }
@@ -655,10 +666,7 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
         const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
         defer api.freeFrame.?(srcP);
         const vP = viewOf(api, srcP.?);
-        const ev_p = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
-            inst.call_state.edgeMap,
-            vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-            vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
+        const ev_p = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
         inst.call_state.iSumP = ev_p.counter;
         inst.call_state.iSumPP = ev_p.counterp;
     }
@@ -694,8 +702,7 @@ fn ensureMotionMap(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n_in: i3
     const vP = viewOf(api, srcP.?);
     const vC = viewOf(api, srcC.?);
 
-    const stats = motion_mod.makeMotionMap(inst.width, inst.height,
-        vP.y, vP.y_stride, vC.y, vC.y_stride);
+    const stats = motion_mod.makeMotionMap(inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     inst.frame_info[@intCast(n)].diffP0 = stats.diffP0;
     inst.frame_info[@intCast(n)].diffP1 = stats.diffP1;
     inst.frame_info[@intCast(n)].diffS0 = stats.diffS0;
@@ -760,19 +767,10 @@ fn deinterlaceInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.
     const vC = viewOf(api, srcC.?);
     const vN = viewOf(api, srcN.?);
 
-    motion_mod.makeMotionMap2Min(inst.width, inst.height,
-        inst.call_state.motionMap4DI,
-        vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-        vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+    motion_mod.makeMotionMap2Min(inst.width, inst.height, inst.call_state.motionMap4DI, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
 
     const vD = viewOfMut(api, dst);
-    output_mod.deinterlace(inst.width, inst.height,
-        inst.call_state.motionMap4DI,
-        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
-        vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-        vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+    output_mod.deinterlace(inst.width, inst.height, inst.call_state.motionMap4DI, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
 }
 
 /// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds
@@ -798,17 +796,10 @@ fn simpleBlurInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.V
     }
     defer if (srcR_opt) |r| api.freeFrame.?(r);
 
-    motion_mod.makeSimpleBlurMap(inst.width, inst.height,
-        inst.call_state.motionMap4DI,
-        vC.y, vC.y_stride,
-        vR.y, vR.y_stride);
+    motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     const vD = viewOfMut(api, dst);
-    output_mod.simpleBlur(inst.width, inst.height,
-        inst.call_state.motionMap4DI,
-        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-        vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
+    output_mod.simpleBlur(inst.width, inst.height, inst.call_state.motionMap4DI, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
 }
 
 fn copyCpnInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
@@ -831,10 +822,7 @@ fn copyCpnInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFr
     defer if (srcR_opt) |r| api.freeFrame.?(r);
 
     const vD = viewOfMut(api, dst);
-    output_mod.copyCPNField(inst.width, inst.height,
-        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-        vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
+    output_mod.copyCPNField(inst.width, inst.height, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
 }
 
 fn deintInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
@@ -863,10 +851,7 @@ fn deintInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFram
     defer if (srcR_opt) |r| api.freeFrame.?(r);
 
     // MakeSimpleBlurMap_YV12 -> motionMap4DI
-    motion_mod.makeSimpleBlurMap(inst.width, inst.height,
-        inst.call_state.motionMap4DI,
-        vC.y, vC.y_stride,
-        ref_y, ref_y_stride);
+    motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, ref_y, ref_y_stride);
 
     // MakeMotionMap2Max_YV12 -> motionMap4DIMax
     const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
@@ -875,24 +860,14 @@ fn deintInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFram
     defer api.freeFrame.?(srcN);
     const vP = viewOf(api, srcP.?);
     const vN = viewOf(api, srcN.?);
-    motion_mod.makeMotionMap2Max(inst.width, inst.height,
-        inst.call_state.motionMap4DIMax,
-        vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-        vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+    motion_mod.makeMotionMap2Max(inst.width, inst.height, inst.call_state.motionMap4DIMax, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
     // during output). Reuse it to avoid an extra allocation, matching the
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
     const vD = viewOfMut(api, dst);
-    output_mod.deintOneField(inst.width, inst.height,
-        inst.call_state.motionMap4DI,
-        inst.call_state.motionMap4DIMax,
-        field_map,
-        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
-        ref_y, ref_y_stride);
+    output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, ref_y, ref_y_stride);
 }
 
 fn drawPrevFrame(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) bool {
@@ -914,8 +889,7 @@ fn drawPrevFrame(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VS
         defer api.freeFrame.?(srcC);
         const vP = viewOf(api, srcP.?);
         const vC = viewOf(api, srcC.?);
-        result = scene_mod.checkSceneChange(inst.width, inst.height,
-            vP.y, vP.y_stride, vC.y, vC.y_stride);
+        result = scene_mod.checkSceneChange(inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     }
     if (result) {
         inst.call_state.iUseFrame = inst.frame_info[@intCast(n_prev)].match;

@@ -90,15 +90,39 @@ pub fn compCp(
                 return true;
             }
 
-            if (spe and mpo) { cs.iUseFrame = 'p'; return true; }
-            if (mpe and spo) { cs.iUseFrame = 'c'; return true; }
-            if (mne and sno) { cs.iUseFrame = 'p'; return true; }
-            if (sne and mno) { cs.iUseFrame = 'c'; return true; }
-            if (spe and spo) { cs.iUseFrame = 'c'; return false; }
-            if (sne and sno) { cs.iUseFrame = 'c'; return false; }
-            if (mpe and mpo and mne and mno) { cs.iUseFrame = 'c'; return false; }
+            if (spe and mpo) {
+                cs.iUseFrame = 'p';
+                return true;
+            }
+            if (mpe and spo) {
+                cs.iUseFrame = 'c';
+                return true;
+            }
+            if (mne and sno) {
+                cs.iUseFrame = 'p';
+                return true;
+            }
+            if (sne and mno) {
+                cs.iUseFrame = 'c';
+                return true;
+            }
+            if (spe and spo) {
+                cs.iUseFrame = 'c';
+                return false;
+            }
+            if (sne and sno) {
+                cs.iUseFrame = 'c';
+                return false;
+            }
+            if (mpe and mpo and mne and mno) {
+                cs.iUseFrame = 'c';
+                return false;
+            }
 
-            if (cs.iSumPC > cs.iSumPP) { cs.iUseFrame = 'p'; return true; }
+            if (cs.iSumPC > cs.iSumPP) {
+                cs.iUseFrame = 'p';
+                return true;
+            }
             cs.iUseFrame = 'c';
             return false;
         }
@@ -170,15 +194,39 @@ pub fn compCn(
                 return true;
             }
 
-            if (spe and mpo) { cs.iUseFrame = 'c'; return true; }
-            if (mpe and spo) { cs.iUseFrame = 'N'; return true; }
-            if (mne and sno) { cs.iUseFrame = 'c'; return true; }
-            if (sne and mno) { cs.iUseFrame = 'n'; return true; }
-            if (spe and spo) { cs.iUseFrame = 'c'; return false; }
-            if (sne and sno) { cs.iUseFrame = 'c'; return false; }
-            if (mpe and mpo and mne and mno) { cs.iUseFrame = 'c'; return false; }
+            if (spe and mpo) {
+                cs.iUseFrame = 'c';
+                return true;
+            }
+            if (mpe and spo) {
+                cs.iUseFrame = 'N';
+                return true;
+            }
+            if (mne and sno) {
+                cs.iUseFrame = 'c';
+                return true;
+            }
+            if (sne and mno) {
+                cs.iUseFrame = 'n';
+                return true;
+            }
+            if (spe and spo) {
+                cs.iUseFrame = 'c';
+                return false;
+            }
+            if (sne and sno) {
+                cs.iUseFrame = 'c';
+                return false;
+            }
+            if (mpe and mpo and mne and mno) {
+                cs.iUseFrame = 'c';
+                return false;
+            }
 
-            if (cs.iSumPC > cs.iSumPN) { cs.iUseFrame = 'n'; return true; }
+            if (cs.iSumPC > cs.iSumPN) {
+                cs.iUseFrame = 'n';
+                return true;
+            }
             cs.iUseFrame = 'c';
             return false;
         }
@@ -435,11 +483,16 @@ test "decide: 4 high-motion + 1 low-motion duplicate -> drop the duplicate ('D')
     // In a high-action sequence where pulldown duplicated one field, the
     // duplicate appears as a LOW-motion frame and the rest are HIGH. Upstream
     // marks high-motion frames with '.' and drops the lone '+' as 'D'.
-    fi[0].diffP0 = 9000; fi[0].diffS0 = 9000;
-    fi[1].diffP0 = 9000; fi[1].diffS0 = 9000;
-    fi[2].diffP0 = 100;  fi[2].diffS0 = 100;  // duplicate
-    fi[3].diffP0 = 9000; fi[3].diffS0 = 9000;
-    fi[4].diffP0 = 9000; fi[4].diffS0 = 9000;
+    fi[0].diffP0 = 9000;
+    fi[0].diffS0 = 9000;
+    fi[1].diffP0 = 9000;
+    fi[1].diffS0 = 9000;
+    fi[2].diffP0 = 100;
+    fi[2].diffS0 = 100; // duplicate
+    fi[3].diffP0 = 9000;
+    fi[3].diffS0 = 9000;
+    fi[4].diffP0 = 9000;
+    fi[4].diffS0 = 9000;
 
     decide(0, 720, 480, 20, fi, bi);
     try testing.expectEqual(@as(u8, '0'), bi[0].level);

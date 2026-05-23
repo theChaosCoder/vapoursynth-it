@@ -1,0 +1,118 @@
+name: CI
+
+# Manual-trigger only for now. To activate on push/PR after the workflow
+# has been validated by a first manual run, add to this `on` block:
+#
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: zig fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+      - name: Check formatting
+        run: zig fmt --check src build.zig build.zig.zon
+
+  unit:
+    name: zig build test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+      - name: Run unit tests
+        run: zig build test --summary all
+
+  cross:
+    name: Cross-compile (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-gnu
+            artifact_name: libzit-linux-x86_64
+            artifact_path: zig-out/lib/libzit.so
+          - target: x86_64-macos
+            artifact_name: libzit-macos-x86_64
+            artifact_path: zig-out/lib/libzit.dylib
+          - target: x86_64-windows-gnu
+            artifact_name: libzit-windows-x86_64
+            artifact_path: zig-out/lib/zit.dll
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+      - name: Build release artifact
+        run: zig build --release=fast -Dtarget=${{ matrix.target }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: [unit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install VapourSynth runtime + headers
+        # VapourSynth is in the universe repo on Ubuntu. The Python binding
+        # has to match the system library — `apt`'s python3-vapoursynth
+        # package keeps the two in lockstep, which is what we want here.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            vapoursynth \
+            python3-vapoursynth \
+            libvapoursynth-dev \
+            clang \
+            pkg-config
+
+      - name: Install pytest + numpy
+        run: pip install pytest numpy
+
+      - name: Build the Zig plugin
+        run: zig build --release=fast
+
+      # The upstream API-4 reference build is what `test_upstream_compare.py`
+      # diffs against. The integration test skips if libit.so is absent, so
+      # building it here turns the bit-exact check on; failing here would
+      # only block the comparison itself, not the rest of the suite.
+      - name: Build the upstream API-4 reference plugin (best effort)
+        continue-on-error: true
+        run: scripts/build_upstream_api4.sh
+
+      - name: Run pytest
+        env:
+          # The conftest looks at zig-out/lib/libzit.so by default — we
+          # rely on the zig build step above having put it there.
+          PYTHONPATH: scripts
+        run: |
+          python -c "import vapoursynth as vs; print(vs.core)"
+          pytest tests/integration -v

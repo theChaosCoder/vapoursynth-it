@@ -68,18 +68,21 @@ pub fn evalIv(
     height: i32,
     pthreshold: i32,
     edge_map: []u8,
-    src_y: [*]const u8, src_y_stride: usize,
-    src_u: [*]const u8, src_u_stride: usize,
-    src_v: [*]const u8, src_v_stride: usize,
-    ref_y: [*]const u8, ref_y_stride: usize,
-    ref_u: [*]const u8, ref_u_stride: usize,
-    ref_v: [*]const u8, ref_v_stride: usize,
+    src_y: [*]const u8,
+    src_y_stride: usize,
+    src_u: [*]const u8,
+    src_u_stride: usize,
+    src_v: [*]const u8,
+    src_v_stride: usize,
+    ref_y: [*]const u8,
+    ref_y_stride: usize,
+    ref_u: [*]const u8,
+    ref_u_stride: usize,
+    ref_v: [*]const u8,
+    ref_v_stride: usize,
 ) EvalResult {
     // Refresh the odd rows of the edge map from `ref`.
-    edge_mod.makeDeMap(width, height, 1, edge_map,
-        ref_y, ref_y_stride,
-        ref_u, ref_u_stride,
-        ref_v, ref_v_stride);
+    edge_mod.makeDeMap(width, height, 1, edge_map, ref_y, ref_y_stride, ref_u, ref_u_stride, ref_v, ref_v_stride);
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == edge_map.len);
     const w: usize = @intCast(width);
     const th: u8 = 40;
@@ -218,9 +221,7 @@ test "evalIv: flat frames produce zero interlace evidence" {
     // normally have run makeDeMap(offset=0, srcC) once before; for these
     // flat-input tests we can skip even that since the result is all zero.
 
-    const r = evalIv(width, height, 100, edge,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const r = evalIv(width, height, 100, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expectEqual(@as(i64, 0), r.counter);
     try std.testing.expectEqual(@as(i64, 0), r.counterp);
 }
@@ -251,12 +252,9 @@ test "evalIv: interlaced striping flags pixels" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(width, height, 0, edge,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    edge_mod.makeDeMap(width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
-    const result = evalIv(width, height, 1_000_000, edge,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const result = evalIv(width, height, 1_000_000, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expect(result.counter > 0);
     try std.testing.expect(result.counterp >= result.counter);
 }
@@ -284,11 +282,8 @@ test "evalIv: result is capped at pthreshold" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(width, height, 0, edge,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    edge_mod.makeDeMap(width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
-    const result = evalIv(width, height, 5, edge,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const result = evalIv(width, height, 5, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expectEqual(@as(i64, 5), result.counter);
 }

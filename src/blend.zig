@@ -38,13 +38,13 @@ pub const Kernel = struct {
 pub fn buildKernel(n_minus_base: i32) Kernel {
     const subrange_width: f64 = 5.0;
     const target_width: f64 = 4.0;
-    const scale = target_width / subrange_width;          // 0.8
+    const scale = target_width / subrange_width; // 0.8
     const filter_step: f64 = if (scale < 1.0) scale else 1.0; // 0.8
-    const support: f64 = 1.0 / filter_step;                // 1.25
-    const size_f: f64 = @ceil(support * 2.0);              // 3
+    const support: f64 = 1.0 / filter_step; // 1.25
+    const size_f: f64 = @ceil(support * 2.0); // 3
     const size: i32 = @intFromFloat(size_f);
 
-    const step = subrange_width / target_width;            // 1.25
+    const step = subrange_width / target_width; // 1.25
     const pos: f64 = @as(f64, @floatFromInt(n_minus_base)) * step;
 
     const start: i32 = @as(i32, @intFromFloat(pos + support)) - size + 1;
@@ -74,9 +74,12 @@ pub fn buildKernel(n_minus_base: i32) Kernel {
 /// View of one source frame's three planes plus their strides. Pre-computed
 /// by the caller so the inner loop stays tight.
 pub const SourceView = struct {
-    y: [*]const u8, y_stride: usize,
-    u: [*]const u8, u_stride: usize,
-    v: [*]const u8, v_stride: usize,
+    y: [*]const u8,
+    y_stride: usize,
+    u: [*]const u8,
+    u_stride: usize,
+    v: [*]const u8,
+    v_stride: usize,
 };
 
 /// Blend `size` source frames with the per-frame weights from `Kernel`.
@@ -87,9 +90,12 @@ pub fn blendFrames(
     height: i32,
     kernel: Kernel,
     srcs: []const SourceView,
-    dst_y: [*]u8, dst_y_stride: usize,
-    dst_u: [*]u8, dst_u_stride: usize,
-    dst_v: [*]u8, dst_v_stride: usize,
+    dst_y: [*]u8,
+    dst_y_stride: usize,
+    dst_u: [*]u8,
+    dst_u_stride: usize,
+    dst_v: [*]u8,
+    dst_v_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(kernel.size)) == srcs.len);
     std.debug.assert(width <= MAX_WIDTH);
@@ -179,13 +185,15 @@ test "blendFrames: identical sources -> output equals source" {
 
     const k = buildKernel(0);
     const sv: blk.SourceView = .{
-        .y = yp.ptr, .y_stride = w,
-        .u = up.ptr, .u_stride = w / 2,
-        .v = vp.ptr, .v_stride = w / 2,
+        .y = yp.ptr,
+        .y_stride = w,
+        .u = up.ptr,
+        .u_stride = w / 2,
+        .v = vp.ptr,
+        .v_stride = w / 2,
     };
     var sources = [_]blk.SourceView{ sv, sv, sv };
-    blk.blendFrames(width, height, k, sources[0..@intCast(k.size)],
-        dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
+    blk.blendFrames(width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
 
     // With identical sources whose weights sum to ~256, the output should be
     // ~equal to the source (rounding may differ by 1 LSB).

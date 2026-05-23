@@ -35,15 +35,24 @@ inline fn chromaWidth(width: i32) i32 {
 pub fn copyCPNField(
     width: i32,
     height: i32,
-    dst_y: [*]u8, dst_y_stride: usize,
-    dst_u: [*]u8, dst_u_stride: usize,
-    dst_v: [*]u8, dst_v_stride: usize,
-    src_y: [*]const u8, src_y_stride: usize,
-    src_u: [*]const u8, src_u_stride: usize,
-    src_v: [*]const u8, src_v_stride: usize,
-    ref_y: [*]const u8, ref_y_stride: usize,
-    ref_u: [*]const u8, ref_u_stride: usize,
-    ref_v: [*]const u8, ref_v_stride: usize,
+    dst_y: [*]u8,
+    dst_y_stride: usize,
+    dst_u: [*]u8,
+    dst_u_stride: usize,
+    dst_v: [*]u8,
+    dst_v_stride: usize,
+    src_y: [*]const u8,
+    src_y_stride: usize,
+    src_u: [*]const u8,
+    src_u_stride: usize,
+    src_v: [*]const u8,
+    src_v_stride: usize,
+    ref_y: [*]const u8,
+    ref_y_stride: usize,
+    ref_u: [*]const u8,
+    ref_u_stride: usize,
+    ref_v: [*]const u8,
+    ref_v_stride: usize,
 ) void {
     const row_y: usize = @intCast(width);
     const row_uv: usize = @intCast(chromaWidth(width));
@@ -58,9 +67,9 @@ pub fn copyCPNField(
 
         if (@mod(yy >> 1, 2) != 0) {
             bitblt(plane.dyp(dst_u, dst_u_stride, height, 1, yo), plane.syp(src_u, src_u_stride, height, 1, yo), row_uv);
-            bitblt(plane.dyp(dst_u, dst_u_stride, height, 1, y),  plane.syp(ref_u, ref_u_stride, height, 1, y),  row_uv);
+            bitblt(plane.dyp(dst_u, dst_u_stride, height, 1, y), plane.syp(ref_u, ref_u_stride, height, 1, y), row_uv);
             bitblt(plane.dyp(dst_v, dst_v_stride, height, 2, yo), plane.syp(src_v, src_v_stride, height, 2, yo), row_uv);
-            bitblt(plane.dyp(dst_v, dst_v_stride, height, 2, y),  plane.syp(ref_v, ref_v_stride, height, 2, y),  row_uv);
+            bitblt(plane.dyp(dst_v, dst_v_stride, height, 2, y), plane.syp(ref_v, ref_v_stride, height, 2, y), row_uv);
         }
     }
 }
@@ -80,13 +89,20 @@ pub fn deintOneField(
     simple_blur: []const u8,
     motion2max: []const u8,
     field_map_scratch: []u8,
-    dst_y: [*]u8, dst_y_stride: usize,
-    dst_u: [*]u8, dst_u_stride: usize,
-    dst_v: [*]u8, dst_v_stride: usize,
-    src_y: [*]const u8, src_y_stride: usize,
-    src_u: [*]const u8, src_u_stride: usize,
-    src_v: [*]const u8, src_v_stride: usize,
-    ref_y: [*]const u8, ref_y_stride: usize,
+    dst_y: [*]u8,
+    dst_y_stride: usize,
+    dst_u: [*]u8,
+    dst_u_stride: usize,
+    dst_v: [*]u8,
+    dst_v_stride: usize,
+    src_y: [*]const u8,
+    src_y_stride: usize,
+    src_u: [*]const u8,
+    src_u_stride: usize,
+    src_v: [*]const u8,
+    src_v_stride: usize,
+    ref_y: [*]const u8,
+    ref_y_stride: usize,
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -237,18 +253,30 @@ pub fn deinterlace(
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst_y: [*]u8, dst_y_stride: usize,
-    dst_u: [*]u8, dst_u_stride: usize,
-    dst_v: [*]u8, dst_v_stride: usize,
-    src_p_y: [*]const u8, src_p_y_stride: usize,
-    src_p_u: [*]const u8, src_p_u_stride: usize,
-    src_p_v: [*]const u8, src_p_v_stride: usize,
-    src_c_y: [*]const u8, src_c_y_stride: usize,
-    src_c_u: [*]const u8, src_c_u_stride: usize,
-    src_c_v: [*]const u8, src_c_v_stride: usize,
-    src_n_y: [*]const u8, src_n_y_stride: usize,
-    src_n_u: [*]const u8, src_n_u_stride: usize,
-    src_n_v: [*]const u8, src_n_v_stride: usize,
+    dst_y: [*]u8,
+    dst_y_stride: usize,
+    dst_u: [*]u8,
+    dst_u_stride: usize,
+    dst_v: [*]u8,
+    dst_v_stride: usize,
+    src_p_y: [*]const u8,
+    src_p_y_stride: usize,
+    src_p_u: [*]const u8,
+    src_p_u_stride: usize,
+    src_p_v: [*]const u8,
+    src_p_v_stride: usize,
+    src_c_y: [*]const u8,
+    src_c_y_stride: usize,
+    src_c_u: [*]const u8,
+    src_c_u_stride: usize,
+    src_c_v: [*]const u8,
+    src_c_v_stride: usize,
+    src_n_y: [*]const u8,
+    src_n_y_stride: usize,
+    src_n_u: [*]const u8,
+    src_n_u_stride: usize,
+    src_n_v: [*]const u8,
+    src_n_v_stride: usize,
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -428,15 +456,24 @@ pub fn simpleBlur(
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst_y: [*]u8, dst_y_stride: usize,
-    dst_u: [*]u8, dst_u_stride: usize,
-    dst_v: [*]u8, dst_v_stride: usize,
-    src_y: [*]const u8, src_y_stride: usize,
-    src_u: [*]const u8, src_u_stride: usize,
-    src_v: [*]const u8, src_v_stride: usize,
-    ref_y: [*]const u8, ref_y_stride: usize,
-    ref_u: [*]const u8, ref_u_stride: usize,
-    ref_v: [*]const u8, ref_v_stride: usize,
+    dst_y: [*]u8,
+    dst_y_stride: usize,
+    dst_u: [*]u8,
+    dst_u_stride: usize,
+    dst_v: [*]u8,
+    dst_v_stride: usize,
+    src_y: [*]const u8,
+    src_y_stride: usize,
+    src_u: [*]const u8,
+    src_u_stride: usize,
+    src_v: [*]const u8,
+    src_v_stride: usize,
+    ref_y: [*]const u8,
+    ref_y_stride: usize,
+    ref_u: [*]const u8,
+    ref_u_stride: usize,
+    ref_v: [*]const u8,
+    ref_v_stride: usize,
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -549,10 +586,7 @@ test "copyCPNField: identical src and ref produce identical output" {
     @memset(du, 0);
     @memset(dv, 0);
 
-    copyCPNField(width, height,
-        dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    copyCPNField(width, height, dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
     // Y plane must equal src
     try std.testing.expectEqualSlices(u8, yp, dy);
@@ -586,10 +620,7 @@ test "copyCPNField: bottom row uses ref, top row uses src" {
     @memset(dy, 0);
     @memset(duv, 0);
 
-    copyCPNField(width, height,
-        dy.ptr, w, duv.ptr, w / 2, duv.ptr, w / 2,
-        sy.ptr, w, uvb.ptr, w / 2, uvb.ptr, w / 2,
-        ry.ptr, w, uvr.ptr, w / 2, uvr.ptr, w / 2);
+    copyCPNField(width, height, dy.ptr, w, duv.ptr, w / 2, duv.ptr, w / 2, sy.ptr, w, uvb.ptr, w / 2, uvb.ptr, w / 2, ry.ptr, w, uvr.ptr, w / 2, uvr.ptr, w / 2);
 
     // Even rows (top fields) come from src (0xAA)
     try std.testing.expectEqual(@as(u8, 0xAA), dy[0 * w + 0]);

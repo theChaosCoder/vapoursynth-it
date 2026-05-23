@@ -132,10 +132,7 @@ test "makeDeMap: uniform input produces zero edges" {
     @memset(v_buf, 100);
     @memset(edge, 0);
 
-    makeDeMap(width, height, 0, edge,
-        y_buf.ptr, w,
-        u_buf.ptr, w / 2,
-        v_buf.ptr, w / 2);
+    makeDeMap(width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
 
     for (edge) |e| try std.testing.expectEqual(@as(u8, 0), e);
 }
@@ -161,10 +158,7 @@ test "makeDeMap: luma spike row produces edge in adjacent rows" {
     @memset(edge, 0);
 
     @memset(y_buf[6 * w .. 7 * w], 200);
-    makeDeMap(width, height, 0, edge,
-        y_buf.ptr, w,
-        u_buf.ptr, w / 2,
-        v_buf.ptr, w / 2);
+    makeDeMap(width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
 
     // Row 6 sees top=row 4 (0), bot=row 8 (0): |200 - 0| = 200
     for (edge[6 * w .. 7 * w]) |e| try std.testing.expectEqual(@as(u8, 200), e);

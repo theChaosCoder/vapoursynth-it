@@ -4,11 +4,16 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
-## [0.1.0] — 2026-05-23
+## [1.3.0] — 2026-05-23
 
 Initial release. A from-scratch Zig port of the VapourSynth-IT
 inverse-telecine filter, bit-exact to the upstream C reference path
 and with the original Avisynth-only parameters restored.
+
+Version numbering picks up the IT lineage:
+  * Avisynth `IT_YV12 v0.1.03` (minamina, 2003)
+  * VapourSynth `VS_IT.dll v0103.1.2` (msg7086, 2014)
+  * This Zig port: `v1.3.0`.
 
 ### Features
 
@@ -54,8 +59,8 @@ and with the original Avisynth-only parameters restored.
 - **Bit-exact** to a mechanically API-3 → API-4-ported build of the
   upstream C reference (`reference/vapoursynth-cpp-api4/`). 198 frames
   across 10 fixture × parameter combinations, plus 720 frames of two
-  real telecined NTSC VOBs (`eyeVTS_01_1.VOB`, `kVTS_01_1.VOB`) in
-  both `fps=24` and `fps=30` mode, byte-for-byte identical.
+  real telecined NTSC VOB samples in both `fps=24` and `fps=30` mode,
+  byte-for-byte identical.
 - **35 Zig unit tests** for the algorithm primitives + SIMD helpers.
 - **58 Python/VapourSynth integration tests** — invariants,
   property checks, error paths, the regression-pinned md5 hashes, the

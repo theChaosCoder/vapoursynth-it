@@ -59,7 +59,10 @@ def section(title: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    src_path = Path(argv[1]) if len(argv) >= 2 else Path("/mnt/Mega2TB/eyeVTS_01_1.VOB")
+    if len(argv) < 2:
+        print(f"usage: {argv[0]} <path-to-telecined-NTSC-source>", file=sys.stderr)
+        return 1
+    src_path = Path(argv[1])
     if not src_path.exists():
         print(f"missing: {src_path}", file=sys.stderr)
         return 1
@@ -122,7 +125,7 @@ def main(argv: list[str]) -> int:
     print(f"  md5 match: {md5_match}/{samples} sampled frames")
 
     # ------------------------------------------------------------------
-    # Pick a high-motion 200-frame window. The opening of eyeVTS is a
+    # Pick a high-motion 200-frame window. The opening of typical content is a
     # mostly-static title card so most params have no visible effect there.
     # Frames ~10000 are usually well into the actual programme.
     moving = full[10000:10200]

@@ -6,8 +6,7 @@ parameters restored, full frame-property support, and `@Vector`-based
 SIMD.
 
 Verified bit-exact against the upstream `--c` reference path across the
-integration test grid and on the real-world VOB samples
-`eyeVTS_01_1.VOB` and `kVTS_01_1.VOB`.
+integration test grid and on real-world telecined NTSC VOB samples.
 
 ## Status
 
@@ -20,7 +19,7 @@ integration test grid and on the real-world VOB samples
 | SIMD via `@Vector` | ✅ ~2× over scalar, ~4× over VIVTC VFM |
 | Cross-compile Linux / macOS / Windows x86_64 | ✅ |
 | CI workflow | ⏳ pending |
-| v0.1.0 release | ⏳ pending |
+| v1.3.0 release | ✅ |
 
 ## Quick start
 
@@ -131,7 +130,7 @@ directory (typically `/usr/local/lib/vapoursynth/` on Linux,
 
 ## Performance
 
-500 frames of `eyeVTS_01_1.VOB` (720×480 NTSC), ReleaseFast build:
+500 frames of a 720×480 NTSC telecined VOB, ReleaseFast build:
 
 | Pipeline | fps |
 | --- | --- |

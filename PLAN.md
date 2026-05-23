@@ -218,10 +218,10 @@ Plus ~100 LoC of API glue (plugin init, filter create, property getters).
 ### Phase 6 — Docs & release
 
 - [x] README with build instructions, example, differences vs the C++ upstream
-- [ ] CHANGELOG with "v0.1.0 — initial Zig port"
+- [ ] CHANGELOG with "v1.3.0 — initial Zig port"
 - [x] Clarify in README: same GPL-2.0 licence, same credits to thejam79/minamina/msg7086
 - [ ] Check the repo can be made public (no secret paths, no tokens)
-- [ ] Tag `v0.1.0`, GitHub release with three binaries
+- [ ] Tag `v1.3.0`, GitHub release with three binaries
 
 ---
 
@@ -256,7 +256,7 @@ Plus ~100 LoC of API glue (plugin init, filter create, property getters).
 
 ---
 
-## 7. Definition of Done for "v0.1.0"
+## 7. Definition of Done for "v1.3.0"
 
 1. `zig build test` green.
 2. Three binaries (`.so`, `.dylib`, `.dll`) produced locally.
@@ -264,4 +264,4 @@ Plus ~100 LoC of API glue (plugin init, filter create, property getters).
    frames md5-identical to the upstream C reference.
 4. README documents build, invocation (`core.zit.IT(...)`), limitations.
 5. The repository `theChaosCoder/vapoursynth-it` contains source code,
-   plan, CI skeleton (inactive), release v0.1.0 with three binaries.
+   plan, CI skeleton (inactive), release v1.3.0 with three binaries.

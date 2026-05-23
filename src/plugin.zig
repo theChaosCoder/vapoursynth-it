@@ -11,7 +11,7 @@ const filter = @import("filter.zig");
 const PLUGIN_ID = "com.thechaoscoder.zit";
 const PLUGIN_NAMESPACE = "zit";
 const PLUGIN_NAME = "VapourSynth IVTC Filter (Zig port)";
-const PLUGIN_VERSION = c.VS_MAKE_VERSION(0, 1);
+const PLUGIN_VERSION = c.VS_MAKE_VERSION(1, 3);
 
 export fn VapourSynthPluginInit2(
     plugin: *c.VSPlugin,

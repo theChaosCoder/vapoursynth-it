@@ -1,76 +1,63 @@
-# VapourSynth-IT
+# VapourSynth-IT upstream — API 4 port
 
-VS_IT.dll v0103.1.2 Copyright(C) 2002 thejam79, 2003 minamina, 2014 msg7086
+This tree is a **mechanical migration** of the upstream
+[VapourSynth-IT](https://github.com/HomeOfVapourSynthEvolution/VapourSynth-IT)
+plugin (commit `6fc9be8`, originally targeting VapourSynth API 3) to
+VapourSynth **API 4**. It exists exclusively as a **bit-exact
+reference** for the Zig port — see `docs/upstream_reference.md` for
+the why.
 
-VapourSynth Plugin - Inverse Telecine (YV12 Only, IT-0051 base, IT_YV12-0103 base)
+The algorithm itself is unchanged. The diff against
+`reference/vapoursynth-cpp/` is purely API-shim:
 
-- Original plugin: IT 0.051 by thejam79
-- Original plugin: IT_YV12 v0.1.03 by minamina
-- Original modify: 64bit/8k mod by poodle from (avisynth64bitplugin)
-- All credits go to them.
-- Special thanks to: macromizer
+| Change                                | Reason                                              |
+| ------------------------------------- | --------------------------------------------------- |
+| `VSNodeRef` → `VSNode`                | renamed in API 4                                    |
+| `VSFrameRef` → `VSFrame`              | renamed in API 4                                    |
+| `propGetInt` → `mapGetIntSaturated`   | maps replaced "prop" terminology                    |
+| `propGetNode` → `mapGetNode`          | same                                                |
+| `setError` → `mapSetError`            | same                                                |
+| `vsapi->createFilter`                 | → `vsapi->createVideoFilter` + `VSFilterDependency` |
+| `vsapi->setVideoInfo` (in `itInit`)   | gone in API 4; passed to `createVideoFilter` directly. `itInit` deleted. |
+| `VapourSynthPluginInit`               | → `VapourSynthPluginInit2(VSPlugin*, const VSPLUGINAPI*)` |
+| `void **instanceData`                 | → `void *instanceData` (no double indirection)      |
+| `cmYUV`                               | → `cfYUV`                                           |
+| `vi->format->...`                     | → `vi->format....` (format is now a value, not a pointer) |
+| `vsapi->getFrame(n, node, nullptr, 0)` (sync) inside `getFrame` callback | → `getFrameFilter(n, node, frameCtx)` (the only legal option under API 4) |
+| `IScriptEnvironment::GetFrame(n)`     | clips `n` to `[0, numFrames-1]` (upstream relied on the API 3 sync API tolerating out-of-range; `getFrameFilter` does not) |
+| `GetFramePre` request range           | widened from `[base, base+5]` / `{n}` to `[base-2, base+6]` / `[n-2, n+2]` to cover the same frame reach upstream got for free from the sync API |
+| `fmParallel`                          | → `fmParallelRequests` (the upstream's `fmParallel` claim is racy against the shared `m_frameInfo[]`; VS R4 serialises requests under this mode) |
+| `vsapi->freeNode(d->node)` in `itFree` | restored (upstream had this commented out due to an API 3 Linux deadlock that does not reproduce here) |
+| `vs_bitblt`                           | aliased to `vsh::bitblt` via macro                  |
+| `vs_aligned_malloc` / `_aligned_free` | rewired to `vsh::vsh_aligned_malloc<unsigned char>` / `vsh::vsh_aligned_free` |
+| `using namespace vsh;`                | added so the bare `bitblt` / aligned-malloc names resolve |
+| SIMD source files                     | removed (`vs_it_mmx.cpp`, `vs_it_sse.cpp`) — they use MSVC inline asm that doesn't compile under clang/g++ on Linux; we only need the `__C` reference path |
+| `__C` define                          | not renamed here; clang's `<crc32intrin.h>` collision is sidestepped by forcing `-std=c++17` |
 
-## License 
+## Building
 
-    This program is free software; you can redistribute it and/or
-    modify it under the terms of the GNU General Public License
-    as published by the Free Software Foundation; either version 2
-    of the License, or (at your option) any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-
-## Usage
-
-    core.it.IT(clip clip, int fps = 24, int threshold = 20, int pthreshold = 75)
-
-    clip                      - clip to be processed. Width < 8192 and YV12 only
-    fps                       - 24: IVTC; 30: frame-matching only
-    threshold / pthreshold    - original developer never mentioned about this
-    (removed) blend = false
-    (removed) ref = "TOP"
-    (removed) diMode = 3
-
-## Example
-
-```python
-v = core.std.BlankClip(format=vs.YUV420P8, color=[40,60,240], fpsnum=30000, fpsden=1001)
-v = core.it.IT(v)
+```bash
+cd reference/vapoursynth-cpp-api4
+PKG_CONFIG_PATH= ./configure --c --cxx=clang++ --extra-cxxflags='-std=c++17'
+make
 ```
 
-## Caution
+That produces `libit.so` in this directory. Load it into VapourSynth as
+`core.it`; the Zig port loads as `core.zit`. Both can coexist in the
+same core, which is exactly what `scripts/compare_upstream.py` and
+`tests/integration/test_upstream_compare.py` do to verify bit-identity.
 
-This is a partial porting.
+`scripts/build_upstream_api4.sh` automates the above.
 
-- Only YV12 is ported and supported.
-- 64bit has not been tested yet.
-- Source code is rarely changed, and help function calls are used to organize variables and core calls.
-- You are welcome to send PR if want to improve this.
-- `blend` has been removed. No blend.
-- `ref` has been removed. It will always point to "TOP".
-- `diMode` has been removed. Only mode = 3 is ported, AFAIK mode 3 is working best.
-- You are welcome to send PR if you think it's necessary.
+## Bit-exact identity to the Zig port
 
-This plugin has 3 code base,
+As of 2026-05-23 the Zig port and this API-4 reference produce
+**byte-identical output** across the integration test grid
+(10 fixture × parameter combinations, 198 frames total). The CI
+integration test `tests/integration/test_upstream_compare.py` enforces
+this on every run where `libit.so` is present.
 
-- The original MMX
-- Pure C routine (`-D__C`)
-- SSE2 intrinsics (`-D__SSE`)
+## License
 
-You are welcome to send PR if you can help to improve the code quality.
-
-## ChangeLog
-
-- v1.2  14/10/15 Change function name to PascalCase.
-- v1.1  14/10/08 Move 2 thread variables back to object to improve speed. Now we support compiling under Linux using g++ and clang++. Clang version appears to be faster but YMMV.
-- v1.0  14/10/06 All inline asm code has been translated to pure C and SSE2 intrinsics. SSE2 comes with 30% speed up compared to original MMX code.
-- v0.4  14/10/04 Code cleanup. Special thanks to macromizer for cleaning up macros.
-- v0.3  14/10/03 Code cleanup, multiple instances problem fixed
-- v0.2  14/10/01 64-bit/8k mod patched
-- v0.1  14/09/30 Initial porting
+GPL-2.0-or-later — same as upstream. All credit for the algorithm
+remains with thejam79 (2002), minamina (2003), and msg7086 (2014).

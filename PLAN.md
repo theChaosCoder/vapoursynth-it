@@ -1,107 +1,108 @@
-# Zig-Port von VapourSynth-IT (Namespace `zit`)
+# Zig port of VapourSynth-IT (namespace `zit`)
 
-> Inverse-Telecine-Plugin (Pulldown-Removal) für VapourSynth, ursprünglich
-> Avisynth-Plugin `IT.dll` (thejam79 2002, minamina 2003), 2014 nach
-> VapourSynth portiert von msg7086. Diese Arbeit portiert die C++-Variante
-> nach **Zig**, mit lauffähigen Binaries für **Linux, macOS, Windows
-> (64-Bit)** und reproduzierbaren Tests.
+> Inverse-Telecine plugin (3:2-pulldown removal) for VapourSynth,
+> originally the Avisynth plugin `IT.dll` (thejam79 2002,
+> minamina 2003), ported to VapourSynth in 2014 by msg7086. This
+> project re-implements the same algorithm in **Zig**, with usable
+> binaries for **Linux, macOS, Windows (64-bit)** and reproducible
+> tests.
 
-- Upstream-Referenz: <https://github.com/HomeOfVapourSynthEvolution/VapourSynth-IT>
-  (Commit `6fc9be8`, lokal entpackt unter `/tmp/vs-it-ref/`).
-- Original Avisynth-Quelle: `Avisynth_IT_YV12/src/` (lokal vorhanden).
-- Ziel-Repository: <https://github.com/theChaosCoder/vapoursynth-it>
-  (existiert bereits, privat, default-Branch leer).
-- Lizenz: GPL-2.0-or-later (vom Original übernommen).
-- Build-Toolchain: Zig 0.16.0 (lokal installiert).
-
----
-
-## 1. Scope & Designentscheidungen
-
-| Punkt | Entscheidung | Begründung |
-| --- | --- | --- |
-| **Sprache** | Zig 0.16.0 | Native Cross-Compile (Linux/macOS/Windows), gute C-ABI, Tests integriert. |
-| **VapourSynth API** | **API 4** (R55+) | Aktueller Standard. C++-Upstream nutzt noch API 3 — wir migrieren. |
-| **Plugin-Namespace** | `zit` | Vom User vorgegeben (Aufruf: `core.zit.IT(clip, ...)`). |
-| **Funktionsname** | `IT` | Identisch zum Upstream, transparenter Drop-In. |
-| **Eingangsformat** | YUV420P8 (wie Upstream) | 1:1-Verhalten; bit-genaue Verifikation gegen C++-Referenz. |
-| **Parameter** | `fps`, `threshold`, `pthreshold` (gleiche Defaults: 24 / 20 / 75) | Wie Upstream. `ref`, `blend`, `diMode` bleiben weggelassen (Upstream-Stand). |
-| **Algorithm-Basis** | Reiner C-Pfad (`__C` in `vs_it_c.cpp`) | Plattform-unabhängig, kein Inline-Asm/Intrinsics nötig. SIMD später optional via Zig `@Vector`. |
-| **Bit-Identität** | Ziel: bit-genau zur Upstream-C-Variante | Pixel-Daten md5-Vergleich gegen `--c`-Build der C++-Version. |
-| **Threading** | Anfangs `fmSerial` (oder API-4-Äquivalent) | Upstream nutzt `fmParallel` mit gemeinsamem Frame-State → Race-Condition. Serial = korrekt; Parallel mit Locking ggf. später. |
-| **Build** | `zig build` als single source of truth | Erzeugt `.so`, `.dylib`, `.dll` für x86_64. ARM64 als Bonus möglich. |
-| **Tests** | Zig-Unit-Tests + Python/VapourSynth-Integrationstests gegen Golden-Frames | Algorithmus-Primitive isoliert; End-to-End gegen Referenzklipp. |
-| **CI** | GitHub Actions Matrix (Linux/macOS/Windows), erst manuell aktiviert | User-Wunsch: „CI später aktivieren". Workflow-Datei mit `workflow_dispatch` only. |
-
-### Bewusst nicht portiert (Upstream-Stand übernommen)
-
-- `blend`, `ref`, `diMode` Parameter (Upstream entfernt; nur diMode 3 bleibt fix codiert).
-- YUY2-Pfad (im Upstream nicht portiert).
-- MMX-/SSE-Code (`vs_it_mmx.cpp`, `vs_it_sse.cpp`). Nur C-Pfad ist Referenz.
-
-### Bekannte Bugs im Upstream (zu fixen)
-
-1. `fmParallel` + gemeinsamer `m_frameInfo[]` → Race. **Fix:** Serial.
-2. `freeNode` ist im `itFree` auskommentiert wegen Deadlock. **Fix:** Korrekte Reihenfolge in API-4-Lifecycle (freeNode beim `frameFree`/Destroy in der richtigen Phase).
-3. Manuelle `_aligned_malloc`/`free` pro Frame. **Fix:** Re-use per-Filterinstanz oder per Frame Context allokieren, mit Zig-Allocator.
+- Upstream reference: <https://github.com/HomeOfVapourSynthEvolution/VapourSynth-IT>
+  (commit `6fc9be8`, locally unpacked under `/tmp/vs-it-ref/`).
+- Original Avisynth source: `Avisynth_IT_YV12/src/` (provided locally).
+- Target GitHub repo: <https://github.com/theChaosCoder/vapoursynth-it>
+  (already exists, private, default branch empty at start).
+- License: GPL-2.0-or-later (inherited from upstream).
+- Build toolchain: Zig 0.16.0 (locally installed).
 
 ---
 
-## 2. Analyse: Was ist vorhanden, was fehlt
+## 1. Scope & design decisions
 
-### Vorhanden
-
-- Original Avisynth IT_YV12 0.1.03 Quellen (`Avisynth_IT_YV12/src/`).
-- VapourSynth-IT Quellen (upstream Tarball, lokal entpackt; 2479 LoC C/C++).
-- Zig 0.16.0 Toolchain.
-- `gh` CLI authentifiziert als `theChaosCoder` (mit `repo`, `workflow` Scopes).
-- Zielrepo existiert (privat, leer).
-
-### Zu beschaffen / generieren
-
-- **VapourSynth-Header** (`VapourSynth4.h`, `VSHelper4.h`, `VSScript4.h`):
-  vom offiziellen [vapoursynth/vapoursynth](https://github.com/vapoursynth/vapoursynth)
-  Repo. Werden unter `vendor/vapoursynth/` eingecheckt (BSD-Lizenz-kompatibel).
-- **Referenz-Build der C++-Version** für Golden-Frames: einmalig mit `--c`
-  bauen, generierte md5-Listen einchecken.
-- **Testklipps**: synthetisch erzeugt (über `core.std.BlankClip` +
-  Telecine-Pattern), keine externen Assets. So bleibt das Repo klein und
-  reproduzierbar.
-- **CI-Workflow** (.github/workflows/ci.yml) — initial nur `workflow_dispatch`,
-  später Trigger ergänzen.
-
-### Algorithmische Oberfläche (zu portierende Funktionen)
-
-Aus `vs_it_c.cpp` / `vs_it_process.cpp` / `vs_it.cpp`:
-
-| Funktion | Aufgabe | LoC |
+| Item | Decision | Reasoning |
 | --- | --- | --- |
-| `IT::IT` (Konstruktor) | State-Arrays, AdjPara, fps-Anpassung | ~30 |
-| `GetFramePre`, `GetFrame`, `GetFrameSub`, `MakeOutput` | VS-Lifecycle | ~120 |
-| `EvalIV_YV12` | Interlace-Voting pro Frame | ~70 |
-| `MakeDEmap_YV12` | Differenz-Edge-Map | ~30 |
-| `MakeMotionMap_YV12` | Motion-Detection prev↔curr | ~60 |
+| **Language** | Zig 0.16.0 | Native cross-compile (Linux/macOS/Windows), good C ABI, tests built-in. |
+| **VapourSynth API** | **API 4** (R55+) | Current standard. C++ upstream still uses API 3 — we migrate. |
+| **Plugin namespace** | `zit` | User-chosen (invocation: `core.zit.IT(clip, ...)`). |
+| **Function name** | `IT` | Same as upstream, transparent drop-in. |
+| **Input format** | YUV420P8 (as upstream) | 1:1 behaviour; bit-exact verification against C++ reference. |
+| **Parameters** | `fps`, `threshold`, `pthreshold` (same defaults: 24 / 20 / 75) | As upstream. `ref`, `blend`, `diMode` re-added later (matched to Avisynth original). |
+| **Algorithm base** | Pure C path (`__C` in `vs_it_c.cpp`) | Platform-independent, no inline asm / intrinsics required. SIMD added later via Zig `@Vector`. |
+| **Bit identity** | Target: bit-exact to upstream C variant | md5 of pixel data versus `--c` build of the C++ version. |
+| **Threading** | Initially `fmParallelRequests` | Upstream uses `fmParallel` with shared per-frame state → race condition. Serial = correct. |
+| **Build** | `zig build` as single source of truth | Produces `.so`, `.dylib`, `.dll` for x86_64. ARM64 nice-to-have. |
+| **Tests** | Zig unit tests + Python/VapourSynth integration tests against golden frames | Algorithm primitives isolated; end-to-end against reference clip. |
+| **CI** | GitHub Actions matrix (Linux/macOS/Windows), enabled manually first | User request: "activate CI later". Workflow file with `workflow_dispatch` only. |
+
+### Deliberately not ported (matches upstream state)
+
+- `blend`, `ref`, `diMode` parameters (initial phase: upstream removed them; we restore later).
+- YUY2 path (not in upstream).
+- MMX/SSE code (`vs_it_mmx.cpp`, `vs_it_sse.cpp`) — the C path is the reference.
+
+### Known upstream bugs to fix
+
+1. `fmParallel` + shared `m_frameInfo[]` → race. **Fix:** serial execution.
+2. `freeNode` is commented out inside `itFree` due to a deadlock. **Fix:** correct API-4 lifecycle.
+3. Manual `_aligned_malloc`/`free` per frame. **Fix:** reuse per-instance buffers, with a Zig allocator.
+
+---
+
+## 2. Analysis: what's available, what's missing
+
+### Available
+
+- Original Avisynth IT_YV12 0.1.03 sources (`Avisynth_IT_YV12/src/`).
+- VapourSynth-IT sources (upstream tarball, locally unpacked; 2479 LoC C/C++).
+- Zig 0.16.0 toolchain.
+- `gh` CLI authenticated as `theChaosCoder` (with `repo`, `workflow` scopes).
+- Target repo exists (private, empty).
+
+### To obtain / generate
+
+- **VapourSynth headers** (`VapourSynth4.h`, `VSHelper4.h`, `VSScript4.h`):
+  from the official [vapoursynth/vapoursynth](https://github.com/vapoursynth/vapoursynth)
+  repo. Vendored under `vendor/vapoursynth/` (LGPL-compatible).
+- **Reference build of the C++ version** for golden frames: built once
+  with `--c`, generated md5 lists checked in.
+- **Test clips**: synthetic, generated (via `core.std.BlankClip` +
+  telecine pattern), no external assets. Keeps the repo small and
+  reproducible.
+- **CI workflow** (`.github/workflows/ci.yml`) — initial trigger only
+  `workflow_dispatch`, others added later.
+
+### Algorithm surface (functions to port)
+
+From `vs_it_c.cpp` / `vs_it_process.cpp` / `vs_it.cpp`:
+
+| Function | Purpose | LoC |
+| --- | --- | --- |
+| `IT::IT` (constructor) | State arrays, AdjPara, fps tweak | ~30 |
+| `GetFramePre`, `GetFrame`, `GetFrameSub`, `MakeOutput` | VS lifecycle | ~120 |
+| `EvalIV_YV12` | Per-frame interlace voting | ~70 |
+| `MakeDEmap_YV12` | Differential edge map | ~30 |
+| `MakeMotionMap_YV12` | Motion detection prev↔curr | ~60 |
 | `MakeMotionMap2Max_YV12` | Motion prev/next/max | ~50 |
-| `MakeSimpleBlurMap_YV12` | Blur-Map für Deint | ~40 |
-| `ChooseBest`, `CompCP` | Match-Auswahl C/P/N | ~110 |
-| `Decide`, `SetFT` | 5er-Block-Decimation (24fps Pulldown) | ~180 |
-| `CopyCPNField`, `DeintOneField_YV12` | Frame-Output | ~170 |
-| `DrawPrevFrame`, `CheckSceneChange` | Szenenwechsel-Handling | ~60 |
-| **Σ Kernlogik** | | **~920 LoC** C++ → ca. 800–900 LoC Zig erwartet |
+| `MakeSimpleBlurMap_YV12` | Blur map for deint | ~40 |
+| `ChooseBest`, `CompCP` | Match selection C/P/N | ~110 |
+| `Decide`, `SetFT` | 5-frame block decimation (24fps pulldown) | ~180 |
+| `CopyCPNField`, `DeintOneField_YV12` | Frame output | ~170 |
+| `DrawPrevFrame`, `CheckSceneChange` | Scene-change handling | ~60 |
+| **Σ core logic** | | **~920 LoC** C++ → ~800–900 LoC Zig expected |
 
-Plus ca. 100 LoC API-Glue (Plugin-Init, Filter-Create, Property-Getter).
+Plus ~100 LoC of API glue (plugin init, filter create, property getters).
 
 ---
 
-## 3. Projekt-Layout (geplant)
+## 3. Project layout (planned)
 
 ```
 .
-├── build.zig                # Cross-Compile-Targets, Test-Steps
-├── build.zig.zon            # Dependencies (keine externen erwartet)
+├── build.zig                # cross-compile targets, test steps
+├── build.zig.zon            # dependencies (none expected)
 ├── src/
-│   ├── plugin.zig           # VS-Plugin-Init, Filter-Registration
-│   ├── filter.zig           # IT-Instance + GetFrame-Lifecycle
+│   ├── plugin.zig           # VS plugin init, filter registration
+│   ├── filter.zig           # IT instance + GetFrame lifecycle
 │   ├── algo/
 │   │   ├── eval_iv.zig      # EvalIV_YV12
 │   │   ├── motion.zig       # MakeMotionMap / MakeMotionMap2Max / MakeSimpleBlurMap
@@ -109,158 +110,158 @@ Plus ca. 100 LoC API-Glue (Plugin-Init, Filter-Create, Property-Getter).
 │   │   ├── decide.zig       # ChooseBest / Decide / CompCP / SetFT
 │   │   ├── output.zig       # CopyCPNField / DeintOneField / DrawPrevFrame
 │   │   └── scene.zig        # CheckSceneChange
-│   ├── frame_state.zig      # CFrameInfo / CTFblockInfo Zig-Pendants
-│   └── vs.zig               # @cImport(VapourSynth4.h) + dünne Wrapper
+│   ├── frame_state.zig      # CFrameInfo / CTFblockInfo Zig equivalents
+│   └── vs.zig               # @cImport(VapourSynth4.h) + thin wrappers
 ├── tests/
-│   ├── unit/                # In-Source-Tests via `zig build test`
+│   ├── unit/                # in-source tests via `zig build test`
 │   └── integration/
 │       ├── conftest.py
-│       ├── test_golden.py   # Verarbeitet Referenzklipp, vergleicht md5
+│       ├── test_golden.py   # process a reference clip, compare md5
 │       └── fixtures/
 │           └── golden_hashes.txt
 ├── vendor/
-│   └── vapoursynth/         # VapourSynth4.h, VSHelper4.h (BSD)
+│   └── vapoursynth/         # VapourSynth4.h, VSHelper4.h (LGPL)
 ├── scripts/
-│   ├── make_reference.sh    # baut C++-Upstream mit --c und erzeugt Golden-Hashes
-│   └── gen_testclip.py      # synthetischer Telecine-Klipp
+│   ├── make_reference.sh    # builds upstream C++ with --c, emits golden hashes
+│   └── gen_testclip.py      # synthetic telecined clip
 ├── .github/workflows/
-│   └── ci.yml               # workflow_dispatch only initial
+│   └── ci.yml               # workflow_dispatch only initially
 ├── README.md
-├── LICENSE                  # GPL-2.0 (vom Upstream)
-└── PLAN.md                  # dieses Dokument
+├── LICENSE                  # GPL-2.0 (from upstream)
+└── PLAN.md                  # this document
 ```
 
 ---
 
 ## 4. Phased TODO
 
-> Reihenfolge ist absichtlich: erst Infrastruktur, dann „dümmster" End-to-End-
-> Durchstich (Identity-Filter), dann Algorithmus stückweise, mit
-> Golden-Frame-Verifikation als Schutznetz.
+> Order is intentional: infrastructure first, then a "dumbest" end-to-end
+> pass-through (identity filter), then the algorithm piece by piece, with
+> golden-frame verification as a safety net.
 
-### Phase 0 — Bootstrap & Repo
+### Phase 0 — Bootstrap & repo
 
-- [ ] Lokales Git-Repo in `` initialisieren
-- [ ] `LICENSE` aus Upstream übernehmen (GPL-2.0)
-- [ ] `README.md` mit Status-Hinweis „Work in progress, Zig port" anlegen
-- [ ] `.gitignore` (zig-out/, zig-cache/, .zig-cache/, build/, *.so, *.dll, *.dylib, __pycache__)
-- [ ] `PLAN.md` (diese Datei) einchecken
-- [ ] VapourSynth-Header (`VapourSynth4.h`, `VSHelper4.h`) nach `vendor/vapoursynth/` legen
-- [ ] Avisynth-Original-Quellen `Avisynth_IT_YV12/` nach `reference/avisynth/` verschieben (als Read-only-Doku)
-- [ ] Upstream-Referenz-Quellen nach `reference/vapoursynth-cpp/` (für Side-by-Side-Vergleiche während des Ports)
-- [ ] `git remote add origin https://github.com/theChaosCoder/vapoursynth-it.git`
-- [ ] Initial-Commit, Push auf neuen Branch `main`
+- [x] Initialise local git repo in ``
+- [x] Take `LICENSE` from upstream (GPL-2.0)
+- [x] Create `README.md` with "work in progress" notice (later expanded)
+- [x] `.gitignore` (zig-out/, zig-cache/, .zig-cache/, build/, *.so, *.dll, *.dylib, __pycache__)
+- [x] Commit this `PLAN.md`
+- [x] Place VapourSynth headers (`VapourSynth4.h`, `VSHelper4.h`) under `vendor/vapoursynth/`
+- [x] Move the Avisynth original sources from `Avisynth_IT_YV12/` to `reference/avisynth/` (read-only docs)
+- [x] Upstream reference sources to `reference/vapoursynth-cpp/` (for side-by-side comparison)
+- [x] `git remote add origin https://github.com/theChaosCoder/vapoursynth-it.git`
+- [x] Initial commit, push to a new `main` branch
 
-### Phase 1 — Build-System & Skeleton
+### Phase 1 — Build system & skeleton
 
-- [ ] `build.zig`: shared-library Target `zit` (Linux .so, macOS .dylib, Windows .dll), Linux/macOS PIC
-- [ ] `build.zig`: cross-compile Steps für `x86_64-windows-gnu`, `x86_64-macos`, `x86_64-linux-gnu` (alle aus Linux-Host)
-- [ ] `build.zig`: `test`-Step für Zig-Unit-Tests
-- [ ] `src/vs.zig`: `@cImport` der VapourSynth-Header, Wrapper-Typen
-- [ ] `src/plugin.zig`: `VapourSynthPluginInit2` Export, registriert `IT` im Namespace `zit` mit Argsig `clip:vnode;fps:int:opt;threshold:int:opt;pthreshold:int:opt;`
-- [ ] `src/filter.zig`: Identity-Filter (Input → Output 1:1) — Smoke-Test
-- [ ] Verifizieren: `vspipe -i -` lädt das Plugin auf Linux, `core.zit.IT(clip)` läuft ohne Crash und liefert unveränderte Frames
-- [ ] Verifizieren: gleicher Smoke-Test gegen Windows-DLL via Wine oder unter Windows-VM (manuell, vor CI-Aktivierung)
+- [x] `build.zig`: shared-library target `zit` (Linux .so, macOS .dylib, Windows .dll), Linux/macOS PIC
+- [x] `build.zig`: cross-compile steps for `x86_64-windows-gnu`, `x86_64-macos`, `x86_64-linux-gnu` (all from a Linux host)
+- [x] `build.zig`: `test` step for Zig unit tests
+- [x] `src/vs.zig`: `@cImport` of the VapourSynth headers, wrapper types
+- [x] `src/plugin.zig`: `VapourSynthPluginInit2` export, registers `IT` in namespace `zit` with argsig `clip:vnode;fps:int:opt;threshold:int:opt;pthreshold:int:opt;`
+- [x] `src/filter.zig`: identity filter (input → output 1:1) — smoke test
+- [x] Verify: `vspipe -i -` loads the plugin on Linux, `core.zit.IT(clip)` runs without crashing and returns unchanged frames
+- [ ] Verify: same smoke test against the Windows DLL via Wine or under a Windows VM (manual, before CI activation)
 
-### Phase 2 — Algorithmus-Port (mit Tests pro Schritt)
+### Phase 2 — Algorithm port (tests per step)
 
-> Jede Funktion bekommt: Zig-Implementierung + Zig-Unit-Test gegen
-> hand-konstruiertes Mini-Pixel-Array + End-to-End-md5-Match.
+> Each function gets: Zig implementation + Zig unit test against hand-built
+> mini pixel arrays + end-to-end md5 match.
 
-- [ ] `frame_state.zig`: `CFrameInfo`, `CTFblockInfo`, Allokation/Init wie Upstream
-- [ ] `algo/edge.zig`: `makeDeMap` + Unit-Test (4×4 Block, bekannte Ausgabe)
-- [ ] `algo/motion.zig`: `makeMotionMap`, `makeMotionMap2Max`, `makeSimpleBlurMap` + Tests
-- [ ] `algo/eval_iv.zig`: `evalIv` + Test
-- [ ] `algo/decide.zig`: `chooseBest`, `compCp`, `decide`, `setFt` + Tests (zustands-basiert, Block-Level)
-- [ ] `algo/scene.zig`: `checkSceneChange` + Test
-- [ ] `algo/output.zig`: `copyCPNField`, `deintOneField`, `drawPrevFrame` + Tests
-- [ ] `filter.zig`: vollständiges `getFrame`-Lifecycle, inkl. `requestFrameFilter` für die 5er-Blöcke bei fps=24
-- [ ] Sauberes Frame-State-Reset zwischen Aufrufen (kein Cross-Frame-Leak)
-- [ ] Korrekte Behandlung der Edge-Cases am Clip-Anfang/-Ende (`clipFrame`)
+- [x] `frame_state.zig`: `CFrameInfo`, `CTFblockInfo`, allocation/init like upstream
+- [x] `algo/edge.zig`: `makeDeMap` + unit test (4×4 block, known output)
+- [x] `algo/motion.zig`: `makeMotionMap`, `makeMotionMap2Max`, `makeSimpleBlurMap` + tests
+- [x] `algo/eval_iv.zig`: `evalIv` + test
+- [x] `algo/decide.zig`: `chooseBest`, `compCp`, `decide`, `setFt` + tests (state-based, block-level)
+- [x] `algo/scene.zig`: `checkSceneChange` + test
+- [x] `algo/output.zig`: `copyCPNField`, `deintOneField`, `drawPrevFrame` + tests
+- [x] `filter.zig`: complete `getFrame` lifecycle, including `requestFrameFilter` for the 5-frame blocks at fps=24
+- [x] Clean frame-state reset between calls (no cross-frame leaks)
+- [x] Correct handling of clip-boundary edge cases (`clipFrame`)
 
-### Phase 3 — Verifikation (Golden-Frame-Tests)
+### Phase 3 — Verification (golden-frame tests)
 
-- [x] `scripts/gen_testclip.py`: 5 synthetische Fixtures (flat color, mod-16 width, telecine, interlaced stripes)
-- [x] `reference/vapoursynth-cpp-api4/`: mechanischer API3→API4-Port des Upstream-Plugins (algorithmus unverändert). `scripts/build_upstream_api4.sh` baut `libit.so`.
-- [x] `scripts/regen_golden.py`: erzeugt Golden-MD5s aus dem Zig-Build → `tests/integration/fixtures/golden_hashes.txt`
-- [x] `scripts/compare_upstream.py`: direkter Vergleich Zig ↔ Upstream-API4-Port
-- [x] `tests/integration/test_filter.py`: 25 Tests — Property/Invariant + Golden-Hash + Error-Paths
-- [x] `tests/integration/test_upstream_compare.py`: 10 Tests — bit-exakt Zig ↔ Upstream über das gesamte Param-Grid (198 Frames, 0 mismatched)
-- [x] Tests für `fps=24` und `fps=30`
-- [x] Tests für verschiedene Auflösungen (128×96, 176×96, 720×480)
-- [x] Tests für threshold / pthreshold Variation
-- [ ] Tests an Clip-Grenzen (erstes/letztes 5er-Block) — implizit über Fixtures abgedeckt, könnte expliziter werden
-- [ ] `--c` vs `--sse` Build-Vergleich des Upstream — übersprungen, da wir nur den `--c`-Pfad als Ground Truth nutzen
+- [x] `scripts/gen_testclip.py`: 5 synthetic fixtures (flat colour, mod-16 width, telecine, interlaced stripes)
+- [x] `reference/vapoursynth-cpp-api4/`: mechanical API3→API4 port of the upstream plugin (algorithm unchanged). `scripts/build_upstream_api4.sh` builds `libit.so`.
+- [x] `scripts/regen_golden.py`: emit golden md5s from the Zig build → `tests/integration/fixtures/golden_hashes.txt`
+- [x] `scripts/compare_upstream.py`: direct Zig ↔ upstream-API4-port comparison
+- [x] `tests/integration/test_filter.py`: 25+ tests — property/invariant + golden hashes + error paths
+- [x] `tests/integration/test_upstream_compare.py`: 10 tests — bit-exact Zig ↔ upstream over the full parameter grid (198 frames, 0 mismatched)
+- [x] Tests for `fps=24` and `fps=30`
+- [x] Tests for different resolutions (128×96, 176×96, 720×480)
+- [x] Tests for threshold / pthreshold variation
+- [ ] Tests for clip boundaries (first/last 5-frame block) — implicitly covered by fixtures, could be made explicit
+- [ ] `--c` vs `--sse` upstream comparison — skipped because the `--c` path is what we treat as ground truth
 
-### Phase 4 — Cross-Compile & Distribution
+### Phase 4 — Cross-compile & distribution
 
-- [ ] `zig build -Dtarget=x86_64-linux-gnu` → `libzit.so` produziert
-- [ ] `zig build -Dtarget=x86_64-macos` → `libzit.dylib` produziert (mit `-undefined dynamic_lookup`-Äquivalent)
-- [ ] `zig build -Dtarget=x86_64-windows-gnu` → `zit.dll` produziert
-- [ ] Optional: `aarch64-macos`, `aarch64-linux-gnu` Targets
-- [ ] Smoke-Test der Linux-`.so` lokal
-- [ ] Smoke-Test der Windows-`.dll` (Wine oder Windows-Host)
-- [ ] Smoke-Test der macOS-`.dylib` (auf macOS-Host, ggf. später)
-- [ ] Release-Skript: `zig build release` packt alle drei in `dist/zit-<version>-<os>.zip`
+- [x] `zig build -Dtarget=x86_64-linux-gnu` → produces `libzit.so`
+- [x] `zig build -Dtarget=x86_64-macos` → produces `libzit.dylib`
+- [x] `zig build -Dtarget=x86_64-windows-gnu` → produces `zit.dll`
+- [ ] Optional: `aarch64-macos`, `aarch64-linux-gnu` targets
+- [x] Smoke-test the Linux `.so` locally
+- [ ] Smoke-test the Windows `.dll` (Wine or Windows host)
+- [ ] Smoke-test the macOS `.dylib` (on a macOS host, later)
+- [ ] Release script: `zig build release` packages all three under `dist/zit-<version>-<os>.zip`
 
-### Phase 5 — CI (inaktiv, vorbereitet)
+### Phase 5 — CI (inactive, prepared)
 
-- [ ] `.github/workflows/ci.yml` mit Jobs:
+- [ ] `.github/workflows/ci.yml` with jobs:
   - `lint`: `zig fmt --check`
-  - `unit`: `zig build test` auf Ubuntu
-  - `cross-build`: Matrix Linux/macOS/Windows, alle aus Linux-Runner via Zig
-  - `integration`: Ubuntu + VapourSynth aus apt, lädt Zig-Plugin, läuft pytest
-- [ ] Trigger initial nur `workflow_dispatch:` (so dass kein PR/Push CI startet)
-- [ ] Notiz in README: „CI activation pending"
-- [ ] Wenn alles grün: später `pull_request` und `push: [main]` Trigger ergänzen (separater Commit, vom User explizit anzustoßen)
+  - `unit`: `zig build test` on Ubuntu
+  - `cross-build`: matrix Linux/macOS/Windows, all from a Linux runner via Zig
+  - `integration`: Ubuntu + VapourSynth via apt, loads the Zig plugin, runs pytest
+- [ ] Trigger initially `workflow_dispatch:` only (so PR/push doesn't run CI)
+- [ ] README note: "CI activation pending"
+- [ ] Once everything is green: add `pull_request` and `push: [main]` triggers (separate commit, explicitly initiated by the user)
 
-### Phase 6 — Doku & Release
+### Phase 6 — Docs & release
 
-- [ ] README mit Build-Anleitung, Beispiel, Unterschieden zum C++-Upstream
-- [ ] CHANGELOG mit „v0.1.0 — initial Zig port"
-- [ ] Klarstellung im README: gleiche GPL-2.0 Lizenz, gleicher Kredit an thejam79/minamina/msg7086
-- [ ] Repo public-fähig prüfen (keine geheimen Pfade, keine Tokens)
-- [ ] Tag `v0.1.0`, GitHub Release mit drei Binaries
+- [x] README with build instructions, example, differences vs the C++ upstream
+- [ ] CHANGELOG with "v0.1.0 — initial Zig port"
+- [x] Clarify in README: same GPL-2.0 licence, same credits to thejam79/minamina/msg7086
+- [ ] Check the repo can be made public (no secret paths, no tokens)
+- [ ] Tag `v0.1.0`, GitHub release with three binaries
 
 ---
 
-## 5. Offene Punkte (Default-Annahmen, vom User bei Bedarf zu korrigieren)
+## 5. Open items (default assumptions, override if needed)
 
-| Frage | Default-Annahme |
+| Question | Default assumption |
 | --- | --- |
-| Repository öffentlich machen? | Bleibt vorerst privat, später `gh repo edit --visibility public` |
-| Avisynth-Original mit ins Repo? | Ja, unter `reference/avisynth/` (read-only Doku) |
-| Bit-exact zur Upstream-C-Variante als hartes Ziel? | Ja. Falls Upstream-Bugs Bit-Identität verhindern: dokumentieren, Test als "differs intentionally" markieren. |
-| Threading parallelisieren? | Erstmal `fmSerial` (korrekt). Parallel optional in späterer Version. |
-| Zig-Version langfristig pinnen? | Ja, `0.16.0` über `minimum_zig_version` in `build.zig.zon`. |
-| ARM64-Targets im ersten Release? | Nice-to-have, kein Blocker. |
+| Make the repository public? | Stays private for now, later `gh repo edit --visibility public` |
+| Avisynth original in the repo? | Yes, under `reference/avisynth/` (read-only docs) |
+| Bit-exact to the upstream C variant as a hard goal? | Yes. If upstream bugs prevent bit identity: document and tag the test as "differs intentionally". |
+| Parallelise threading? | Initially `fmParallelRequests` (correct). Parallel optional later. |
+| Pin Zig version long-term? | Yes, `0.16.0` via `minimum_zig_version` in `build.zig.zon`. |
+| ARM64 targets in the first release? | Nice-to-have, no blocker. |
 
 ---
 
-## 6. Risiken
+## 6. Risks
 
-- **Bit-Identität evtl. nicht erreichbar**: Falls Upstream `--sse` und `--c`
-  bereits abweichen, ist „bit-genau" nur gegen einen Pfad sinnvoll.
-  Mitigation: gegen `--c` testen, in Doku festhalten.
-- **VapourSynth-API-4-Migration**: Funktionsnamen geändert (`vsapi->` →
-  meist gleiche Semantik, andere Signatur). Mitigation: dünne `vs.zig`-
-  Wrapperschicht absorbiert API-Unterschiede.
-- **Windows-Build ohne Windows-Host testen**: Zig cross-compiled, aber das
-  fertige `.dll` muss in VapourSynth-Windows laden. Mitigation: Wine
-  lokal, später CI auf `windows-latest`.
-- **macOS-Codesigning**: dylib für non-developer-tools muss ggf. signiert
-  werden. Mitigation: nur als Hinweis im README, kein Blocker.
-- **Performance**: reiner C-Pfad ist ~30 % langsamer als SSE2 (laut
-  Upstream-Changelog). Mitigation: später `@Vector(16, u8)` einbauen.
+- **Bit identity may not be achievable**: if upstream `--sse` and `--c`
+  already diverge, "bit-exact" only makes sense against one path.
+  Mitigation: test against `--c`, document in the docs.
+- **VapourSynth API 4 migration**: function names changed (`vsapi->`
+  often the same semantics but different signature). Mitigation: a thin
+  `vs.zig` wrapper layer absorbs the API differences.
+- **Test Windows build without a Windows host**: Zig cross-compiles, but
+  the finished `.dll` must load in VapourSynth-Windows. Mitigation:
+  Wine locally, later CI on `windows-latest`.
+- **macOS code-signing**: a dylib for non-developer-tools may need
+  signing. Mitigation: note in the README, not a blocker.
+- **Performance**: the pure C path is ~30% slower than SSE2 (per
+  upstream changelog). Mitigation: add `@Vector(16, u8)` later.
 
 ---
 
-## 7. Definition of Done für „v0.1.0"
+## 7. Definition of Done for "v0.1.0"
 
-1. `zig build test` grün.
-2. Drei Binaries (`.so`, `.dylib`, `.dll`) lokal erzeugt.
-3. Integrationstest: ≥3 Test-Clips, je `fps=24` und `fps=30`, alle Frames
-   md5-identisch zur Upstream-C-Referenz.
-4. README dokumentiert Build, Aufruf (`core.zit.IT(...)`), Limitierungen.
-5. Repo `theChaosCoder/vapoursynth-it` enthält Quellcode, Plan, CI-Skeleton
-   (inaktiv), Release v0.1.0 mit drei Binaries.
+1. `zig build test` green.
+2. Three binaries (`.so`, `.dylib`, `.dll`) produced locally.
+3. Integration test: ≥3 test clips, both `fps=24` and `fps=30`, all
+   frames md5-identical to the upstream C reference.
+4. README documents build, invocation (`core.zit.IT(...)`), limitations.
+5. The repository `theChaosCoder/vapoursynth-it` contains source code,
+   plan, CI skeleton (inactive), release v0.1.0 with three binaries.

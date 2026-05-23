@@ -3,7 +3,7 @@ name: Release
 # Two trigger paths:
 #
 # 1. `push: tags: v*.*.*` — the canonical path. Push an annotated tag
-#    matching the SemVer pattern and the workflow builds the three
+#    matching the SemVer pattern and the workflow builds the five
 #    platform zips and creates / replaces the GitHub release.
 #
 # 2. `workflow_dispatch` — manual re-run against an existing tag.
@@ -43,7 +43,7 @@ jobs:
           echo "Releasing tag: $tag"
 
       - name: Checkout at tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ steps.tag.outputs.tag }}
 
@@ -52,7 +52,7 @@ jobs:
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
           echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
-      - name: Cross-compile (Linux / macOS / Windows, all x86_64)
+      - name: Cross-compile (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64)
         run: zig build cross
 
       - name: Stage release artefacts
@@ -69,7 +69,7 @@ jobs:
             cp LICENSE "$stage/LICENSE"
             cat > "$stage/README.txt" <<EOF
           zit — VapourSynth IT plugin, Zig port $TAG
-          Platform: $plat x86_64
+          Platform: $plat
 
           Drop $bin into your VapourSynth plugins directory and call:
               core.zit.IT(clip, fps=24, threshold=20, pthreshold=75,
@@ -78,12 +78,14 @@ jobs:
           Full docs:  https://github.com/${{ github.repository }}
           License:    GPL-2.0-or-later (see LICENSE)
           EOF
-            ( cd "$stage" && zip -q "../../dist/$prefix-$plat-x86_64-$TAG.zip" "$bin" LICENSE README.txt )
+            ( cd "$stage" && zip -q "../../dist/$prefix-$plat-$TAG.zip" "$bin" LICENSE README.txt )
           }
 
-          make_zip linux   libzit.so     libzit
-          make_zip macos   libzit.dylib  libzit
-          make_zip windows zit.dll       zit
+          make_zip linux-x86_64    libzit.so     libzit
+          make_zip linux-aarch64   libzit.so     libzit
+          make_zip macos-x86_64    libzit.dylib  libzit
+          make_zip macos-aarch64   libzit.dylib  libzit
+          make_zip windows-x86_64  zit.dll       zit
 
           ls -la dist/
 

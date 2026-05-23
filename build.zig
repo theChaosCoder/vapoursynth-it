@@ -52,15 +52,16 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
 
     // ---- Cross-compile convenience targets -------------------------------
-    // `zig build cross` produces release artifacts for the three supported
-    // operating systems (x86_64 only). Each target is installed under
-    // `zig-out/<os>/`.
-    const cross_step = b.step("cross", "Build release artifacts for Linux/macOS/Windows (x86_64)");
+    // `zig build cross` produces release artifacts for the five supported
+    // (OS, arch) tuples. Each target is installed under `zig-out/<name>/`.
+    const cross_step = b.step("cross", "Build release artifacts for Linux/macOS/Windows (x86_64 + ARM64)");
 
     const cross_targets = .{
-        .{ .name = "linux", .triple = "x86_64-linux-gnu" },
-        .{ .name = "macos", .triple = "x86_64-macos" },
-        .{ .name = "windows", .triple = "x86_64-windows-gnu" },
+        .{ .name = "linux-x86_64", .triple = "x86_64-linux-gnu" },
+        .{ .name = "linux-aarch64", .triple = "aarch64-linux-gnu" },
+        .{ .name = "macos-x86_64", .triple = "x86_64-macos" },
+        .{ .name = "macos-aarch64", .triple = "aarch64-macos" },
+        .{ .name = "windows-x86_64", .triple = "x86_64-windows-gnu" },
     };
 
     inline for (cross_targets) |t| {

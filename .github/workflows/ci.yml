@@ -25,7 +25,7 @@ jobs:
     name: zig fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Zig ${{ env.ZIG_VERSION }}
         run: |
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
@@ -38,7 +38,7 @@ jobs:
     name: zig build test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Zig ${{ env.ZIG_VERSION }}
         run: |
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
@@ -50,37 +50,44 @@ jobs:
     name: Cross-compile (all targets)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Zig ${{ env.ZIG_VERSION }}
         run: |
           curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
           echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - name: Build all three platform binaries
+      - name: Build all five platform binaries
         # The `cross` step in build.zig deposits each artefact under a
-        # predictable `zig-out/{linux,macos,windows}/` subdirectory; that's
-        # more reliable than the per-target install layout (Zig drops
-        # Windows DLLs into `zig-out/bin/` rather than `lib/`, for
-        # instance, which trips up a naive matrix upload).
+        # predictable `zig-out/<name>/` subdirectory; that's more reliable
+        # than the per-target install layout (Zig drops Windows DLLs into
+        # `zig-out/bin/` rather than `lib/`, for instance, which trips up
+        # a naive matrix upload).
         run: zig build cross
       - name: List built artefacts
-        run: find zig-out -type f -name '*.so' -o -name '*.dylib' -o -name '*.dll'
-      - name: Upload Linux .so
-        uses: actions/upload-artifact@v4
+        run: find zig-out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | sort
+      - uses: actions/upload-artifact@v5
         with:
           name: libzit-linux-x86_64
-          path: zig-out/linux/libzit.so
+          path: zig-out/linux-x86_64/libzit.so
           if-no-files-found: error
-      - name: Upload macOS .dylib
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
+        with:
+          name: libzit-linux-aarch64
+          path: zig-out/linux-aarch64/libzit.so
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v5
         with:
           name: libzit-macos-x86_64
-          path: zig-out/macos/libzit.dylib
+          path: zig-out/macos-x86_64/libzit.dylib
           if-no-files-found: error
-      - name: Upload Windows .dll
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
+        with:
+          name: libzit-macos-aarch64
+          path: zig-out/macos-aarch64/libzit.dylib
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v5
         with:
           name: libzit-windows-x86_64
-          path: zig-out/windows/zit.dll
+          path: zig-out/windows-x86_64/zit.dll
           if-no-files-found: error
 
   # Integration tests need a working VapourSynth install. The default
@@ -96,7 +103,7 @@ jobs:
     needs: [unit]
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Zig ${{ env.ZIG_VERSION }}
         run: |

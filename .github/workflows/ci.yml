@@ -1,13 +1,14 @@
 name: CI
 
-# Manual-trigger only for now. To activate on push/PR after the workflow
-# has been validated by a first manual run, add to this `on` block:
-#
-#   push:
-#     branches: [main]
-#   pull_request:
-#     branches: [main]
 on:
+  push:
+    branches: [main]
+    # Don't double-run on tag push — the release workflow already builds
+    # and tests there, and CI on tags adds nothing.
+    tags-ignore:
+      - 'v*.*.*'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

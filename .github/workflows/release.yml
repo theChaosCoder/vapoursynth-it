@@ -1,0 +1,106 @@
+name: Release
+
+# Two trigger paths:
+#
+# 1. `push: tags: v*.*.*` — the canonical path. Push an annotated tag
+#    matching the SemVer pattern and the workflow builds the three
+#    platform zips and creates / replaces the GitHub release.
+#
+# 2. `workflow_dispatch` — manual re-run against an existing tag.
+#    Useful when you want to regenerate assets without bumping the
+#    tag (e.g. fixing a typo in CHANGELOG.md).
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release against (e.g. v1.3.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve target tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Releasing tag: $tag"
+
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+
+      - name: Cross-compile (Linux / macOS / Windows, all x86_64)
+        run: zig build cross
+
+      - name: Stage release artefacts
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.tag.outputs.tag }}'
+          mkdir -p dist
+
+          make_zip() {
+            local plat="$1" bin="$2" prefix="$3"
+            local stage="staging/$plat"
+            mkdir -p "$stage"
+            cp "zig-out/$plat/$bin" "$stage/$bin"
+            cp LICENSE "$stage/LICENSE"
+            cat > "$stage/README.txt" <<EOF
+          zit — VapourSynth IT plugin, Zig port $TAG
+          Platform: $plat x86_64
+
+          Drop $bin into your VapourSynth plugins directory and call:
+              core.zit.IT(clip, fps=24, threshold=20, pthreshold=75,
+                          ref="TOP", blend=0, diMode=3)
+
+          Full docs:  https://github.com/${{ github.repository }}
+          License:    GPL-2.0-or-later (see LICENSE)
+          EOF
+            ( cd "$stage" && zip -q "../../dist/$prefix-$plat-x86_64-$TAG.zip" "$bin" LICENSE README.txt )
+          }
+
+          make_zip linux   libzit.so     libzit
+          make_zip macos   libzit.dylib  libzit
+          make_zip windows zit.dll       zit
+
+          ls -la dist/
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG='${{ steps.tag.outputs.tag }}'
+
+          # Idempotent: if the release for this tag already exists, replace
+          # the assets in place; otherwise create the release fresh.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — refreshing assets and notes"
+            for old in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
+              gh release delete-asset "$TAG" "$old" --yes
+            done
+            gh release upload "$TAG" dist/*.zip
+            gh release edit "$TAG" --notes-file CHANGELOG.md
+          else
+            gh release create "$TAG" \
+              --title "$TAG — initial Zig port" \
+              --notes-file CHANGELOG.md \
+              dist/*.zip
+          fi

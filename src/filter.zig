@@ -290,22 +290,29 @@ fn getFrame(
 // ---------------------------------------------------------------------------
 
 fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_n: i32) void {
+    // Frame-reach analysis (worst case):
+    //  - ChooseBest(n) reads [n-1, n+1] (srcC, srcP, ensureMotionMap of n+1).
+    //  - GetFrameSub(n) -> ChooseBest(n)               : reach [n-1, n+1]
+    //  - MakeOutput(n) may call DrawPrevFrame(n) which
+    //    triggers GetFrameSub(n-1) and GetFrameSub(n+1):
+    //      * GetFrameSub(n-1)  -> reach [n-2, n  ]
+    //      * GetFrameSub(n+1)  -> reach [n,   n+2]
+    //  -> union per output frame: [n-2, n+2].
+    //  - For fps=24, the same applies for every frame in the 5-frame block.
     if (inst.fps == 24) {
-        // For one output frame at index out_n we'll be walking a block of 5
-        // input frames at base..base+4. Each one's ChooseBest reads n-1, n,
-        // n+1. MakeOutput / DrawPrevFrame may reach to n-1 and n+1 again.
-        // Safest: request [base-1, base+5] inclusive.
         const tf = out_n + @divTrunc(out_n, 4);
         const base = @divTrunc(tf, 5) * 5;
-        var i: i32 = base - 1;
-        while (i <= base + 5) : (i += 1) {
+        // Range to cover: GetFrameSub(base..base+4) -> [base-1, base+5],
+        // plus DrawPrevFrame on the chosen input frame which is within
+        // [base, base+4] -> can extend to [base-2, base+6].
+        var i: i32 = base - 2;
+        while (i <= base + 6) : (i += 1) {
             const clipped = plane.clipFrame(i, inst.max_frames);
             api.requestFrameFilter.?(clipped, inst.node, ctx);
         }
     } else {
-        // fps=30 / passthrough match-only: ChooseBest needs [n-1, n+1].
-        var i: i32 = out_n - 1;
-        while (i <= out_n + 1) : (i += 1) {
+        var i: i32 = out_n - 2;
+        while (i <= out_n + 2) : (i += 1) {
             const clipped = plane.clipFrame(i, inst.max_frames);
             api.requestFrameFilter.?(clipped, inst.node, ctx);
         }

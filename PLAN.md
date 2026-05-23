@@ -180,14 +180,15 @@ Plus ca. 100 LoC API-Glue (Plugin-Init, Filter-Create, Property-Getter).
 
 ### Phase 3 — Verifikation (Golden-Frame-Tests)
 
-- [ ] `scripts/gen_testclip.py`: erzeugt synthetischen Telecine-Klipp (3:2-Pulldown von 24p→30i) mit `core.std.BlankClip` + `core.std.SeparateFields` + `core.std.Interleave`
-- [ ] `scripts/make_reference.sh`: baut Upstream-C++-Plugin mit `./configure --c && make`, läuft Testklipp durch, dumpt per-Frame-md5 nach `tests/integration/fixtures/golden_hashes.txt`
-- [ ] `tests/integration/test_golden.py` (pytest + VapourSynth Python): lädt Zig-Plugin, vergleicht md5 jedes Output-Frames mit Golden
-- [ ] Tests sowohl für `fps=24` als auch `fps=30`
-- [ ] Tests an Clip-Grenzen (erstes/letztes 5er-Block)
-- [ ] Tests für verschiedene Auflösungen (320×240, 720×480 NTSC, 1920×1080 mod 16)
-- [ ] Tests für threshold / pthreshold Variation
-- [ ] Sanity-Run mit `--c` UND `--sse` Build des Upstream — beide müssen identisches md5 liefern, sonst stimmt das „bit-exact"-Ziel von vornherein nicht (dann: nur `--c` als Referenz)
+- [x] `scripts/gen_testclip.py`: 5 synthetische Fixtures (flat color, mod-16 width, telecine, interlaced stripes)
+- [~] `scripts/make_reference.sh` (deferred → see `docs/upstream_reference.md`): Upstream baut, segfaultet beim ersten `get_frame` unter VS-R76-API3-compat. Bit-Exact-Vergleich verschoben auf Docker/older-VS oder manuellen API4-Port von upstream.
+- [x] `scripts/regen_golden.py`: erzeugt Golden-MD5s aus dem aktuellen Zig-Build → `tests/integration/fixtures/golden_hashes.txt`. Self-referential (Regressionsschutz, kein Bit-Exact-Beweis).
+- [x] `tests/integration/test_filter.py` (pytest): 25 Tests — Property/Invariant-Checks + Golden-Hash-Regression + Error-Paths.
+- [x] Tests sowohl für `fps=24` als auch `fps=30`
+- [x] Tests für verschiedene Auflösungen (128×96, 176×96, 720×480)
+- [x] Tests für threshold / pthreshold Variation
+- [ ] Tests an Clip-Grenzen (erstes/letztes 5er-Block) — implizit durch Golden-Hashes, könnte expliziter werden
+- [ ] Sanity-Run mit `--c` vs `--sse` Build des Upstream — geht erst wenn upstream läuft
 
 ### Phase 4 — Cross-Compile & Distribution
 

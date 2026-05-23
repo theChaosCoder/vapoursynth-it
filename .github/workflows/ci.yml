@@ -14,15 +14,23 @@ on:
 permissions:
   contents: read
 
+# Centralise the Zig version. The ziglang.org download URL pattern
+# is `https://ziglang.org/download/{ZIG_VERSION}/zig-{arch}-{os}-{ZIG_VERSION}.tar.xz`
+# (note the new ordering: <arch>-<os>, not <os>-<arch>, since 0.15.0).
+env:
+  ZIG_VERSION: "0.16.0"
+
 jobs:
   lint:
     name: zig fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - run: zig version
       - name: Check formatting
         run: zig fmt --check src build.zig build.zig.zon
 
@@ -31,9 +39,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: Run unit tests
         run: zig build test --summary all
 
@@ -55,9 +64,10 @@ jobs:
             artifact_path: zig-out/lib/zit.dll
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: Build release artifact
         run: zig build --release=fast -Dtarget=${{ matrix.target }}
       - name: Upload artifact
@@ -74,9 +84,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - uses: actions/setup-python@v5
         with:

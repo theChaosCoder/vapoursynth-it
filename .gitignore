@@ -1,0 +1,37 @@
+# Zig
+zig-out/
+zig-cache/
+.zig-cache/
+
+# Build artifacts
+build/
+dist/
+*.so
+*.dylib
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.exp
+
+# Python (integration tests)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editor / OS / tooling
+.vscode/
+.idea/
+.claude/
+*.swp
+.DS_Store
+
+# Reference build artifacts (when building the C++ upstream locally for golden hashes)
+reference/vapoursynth-cpp/config.mak
+reference/vapoursynth-cpp/config.log
+reference/vapoursynth-cpp/.depend
+reference/vapoursynth-cpp/src/*.o

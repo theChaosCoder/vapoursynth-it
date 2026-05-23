@@ -181,14 +181,16 @@ Plus ca. 100 LoC API-Glue (Plugin-Init, Filter-Create, Property-Getter).
 ### Phase 3 — Verifikation (Golden-Frame-Tests)
 
 - [x] `scripts/gen_testclip.py`: 5 synthetische Fixtures (flat color, mod-16 width, telecine, interlaced stripes)
-- [~] `scripts/make_reference.sh` (deferred → see `docs/upstream_reference.md`): Upstream baut, segfaultet beim ersten `get_frame` unter VS-R76-API3-compat. Bit-Exact-Vergleich verschoben auf Docker/older-VS oder manuellen API4-Port von upstream.
-- [x] `scripts/regen_golden.py`: erzeugt Golden-MD5s aus dem aktuellen Zig-Build → `tests/integration/fixtures/golden_hashes.txt`. Self-referential (Regressionsschutz, kein Bit-Exact-Beweis).
-- [x] `tests/integration/test_filter.py` (pytest): 25 Tests — Property/Invariant-Checks + Golden-Hash-Regression + Error-Paths.
-- [x] Tests sowohl für `fps=24` als auch `fps=30`
+- [x] `reference/vapoursynth-cpp-api4/`: mechanischer API3→API4-Port des Upstream-Plugins (algorithmus unverändert). `scripts/build_upstream_api4.sh` baut `libit.so`.
+- [x] `scripts/regen_golden.py`: erzeugt Golden-MD5s aus dem Zig-Build → `tests/integration/fixtures/golden_hashes.txt`
+- [x] `scripts/compare_upstream.py`: direkter Vergleich Zig ↔ Upstream-API4-Port
+- [x] `tests/integration/test_filter.py`: 25 Tests — Property/Invariant + Golden-Hash + Error-Paths
+- [x] `tests/integration/test_upstream_compare.py`: 10 Tests — bit-exakt Zig ↔ Upstream über das gesamte Param-Grid (198 Frames, 0 mismatched)
+- [x] Tests für `fps=24` und `fps=30`
 - [x] Tests für verschiedene Auflösungen (128×96, 176×96, 720×480)
 - [x] Tests für threshold / pthreshold Variation
-- [ ] Tests an Clip-Grenzen (erstes/letztes 5er-Block) — implizit durch Golden-Hashes, könnte expliziter werden
-- [ ] Sanity-Run mit `--c` vs `--sse` Build des Upstream — geht erst wenn upstream läuft
+- [ ] Tests an Clip-Grenzen (erstes/letztes 5er-Block) — implizit über Fixtures abgedeckt, könnte expliziter werden
+- [ ] `--c` vs `--sse` Build-Vergleich des Upstream — übersprungen, da wir nur den `--c`-Pfad als Ground Truth nutzen
 
 ### Phase 4 — Cross-Compile & Distribution
 

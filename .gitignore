@@ -34,7 +34,9 @@ venv/
 encode_test/
 
 # Reference build artifacts (when building the C++ upstream locally for golden hashes)
-reference/vapoursynth-cpp/config.mak
-reference/vapoursynth-cpp/config.log
-reference/vapoursynth-cpp/.depend
-reference/vapoursynth-cpp/src/*.o
+reference/**/config.mak
+reference/**/config.log
+reference/**/.depend
+reference/**/src/*.o
+reference/**/libit.so
+reference/**/conftest.*

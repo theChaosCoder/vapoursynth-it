@@ -43,18 +43,22 @@ pub const EvalResult = struct {
 };
 
 /// EvalIV_YV12 — the caller passes:
-///   * src_* : the "current" frame's planes
-///   * ref_* : the reference frame's planes (P, C or N, depending on call)
-///   * edge_map : same `width * height` buffer the caller pre-populated via
-///       makeDeMap(..., offset = 1, ref_*) so that even-row edges land at
-///       y = 1, 3, 5, ... in the map.
+///   * src_* : the "current" frame's planes (provides surrounding rows pT/pB)
+///   * ref_* : the reference frame's planes (provides the center row pC)
+///   * edge_map : `width * height` byte buffer; the caller is expected to
+///       have populated the EVEN rows via `makeDeMap(..., offset=0, srcC)`
+///       *before* the chain of EvalIV calls. This function then overwrites
+///       the ODD rows with `makeDeMap(..., offset=1, ref)` internally —
+///       matching upstream's EvalIV_YV12 which itself calls
+///       `MakeDEmap_YV12(env, ref, 1)` at the top of every invocation.
+///
 /// The function caps `counter` at `pthreshold` and bails early once it
 /// crosses, matching upstream's optimisation.
 pub fn evalIv(
     width: i32,
     height: i32,
     pthreshold: i32,
-    edge_map: []const u8,
+    edge_map: []u8,
     src_y: [*]const u8, src_y_stride: usize,
     src_u: [*]const u8, src_u_stride: usize,
     src_v: [*]const u8, src_v_stride: usize,
@@ -62,6 +66,11 @@ pub fn evalIv(
     ref_u: [*]const u8, ref_u_stride: usize,
     ref_v: [*]const u8, ref_v_stride: usize,
 ) EvalResult {
+    // Refresh the odd rows of the edge map from `ref`.
+    edge_mod.makeDeMap(width, height, 1, edge_map,
+        ref_y, ref_y_stride,
+        ref_u, ref_u_stride,
+        ref_v, ref_v_stride);
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == edge_map.len);
     const w: usize = @intCast(width);
     const th: u8 = 40;
@@ -154,9 +163,9 @@ test "evalIv: flat frames produce zero interlace evidence" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    // populate edge map for ref @ offset 1 — all zero with flat input.
-    edge_mod.makeDeMap(width, height, 1, edge,
-        yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    // EvalIV now refreshes the offset=1 rows internally. The caller would
+    // normally have run makeDeMap(offset=0, srcC) once before; for these
+    // flat-input tests we can skip even that since the result is all zero.
 
     const r = evalIv(width, height, 100, edge,
         yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2,
@@ -191,7 +200,7 @@ test "evalIv: interlaced striping flags pixels" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(width, height, 1, edge,
+    edge_mod.makeDeMap(width, height, 0, edge,
         yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
     const result = evalIv(width, height, 1_000_000, edge,
@@ -224,7 +233,7 @@ test "evalIv: result is capped at pthreshold" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(width, height, 1, edge,
+    edge_mod.makeDeMap(width, height, 0, edge,
         yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
     const result = evalIv(width, height, 5, edge,

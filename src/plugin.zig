@@ -210,6 +210,16 @@ fn mapGetIntDefault(
 // Negate-return helper for `if (validateInput(vi)) |reason|` ergonomics.
 // (Zig doesn't allow `|x|` capture on a plain optional-returning expr in `if`
 // when used inside a more complex condition — this just wraps it cleanly.)
+// Aggregate tests from sibling modules so `zig build test` runs everything.
+test {
+    _ = @import("state.zig");
+    _ = @import("plane.zig");
+    _ = @import("edge.zig");
+    _ = @import("eval_iv.zig");
+    _ = @import("motion.zig");
+    _ = @import("scene.zig");
+}
+
 test "validateInput rejects non-YUV420P8" {
     var fmt = std.mem.zeroes(c.VSVideoFormat);
     fmt.colorFamily = c.cfRGB;

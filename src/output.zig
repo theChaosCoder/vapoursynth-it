@@ -156,22 +156,35 @@ pub fn deintOneField(
 
         const fm_row: usize = @intCast(plane.clipY(y, height));
         const fmB_row: usize = @intCast(plane.clipY(y + 1, height));
-        const pFM = field_map_scratch[fm_row * w ..][0..w];
-        const pFMB = field_map_scratch[fmB_row * w ..][0..w];
+        const fm_base: isize = @as(isize, @intCast(fm_row)) * @as(isize, @intCast(w));
+        const fmB_base: isize = @as(isize, @intCast(fmB_row)) * @as(isize, @intCast(w));
+        const buf_len: isize = @intCast(field_map_scratch.len);
+
+        // Read field_map with absolute offsets, matching upstream's pointer
+        // arithmetic: `pFM[x-1]` at x=0 spills into the previous row's last
+        // byte, and `pFM[x+1]` at x=width-1 spills into the next row's first
+        // byte. The C++ original relies on the field map being one
+        // contiguous `new unsigned char[width*height]` allocation; we
+        // replicate that lookup pattern bit-for-bit. Only the *very* first
+        // and last bytes of the whole buffer (which are UB-reads in upstream
+        // and happen to land on heap padding) are clamped to 0.
+        const fm_at = struct {
+            inline fn get(buf: []const u8, idx: isize, total: isize) u8 {
+                if (idx < 0 or idx >= total) return 0;
+                return buf[@intCast(idx)];
+            }
+        }.get;
 
         var x: usize = 0;
         while (x < w) : (x += 1) {
+            const xi: isize = @intCast(x);
             const x_half = x >> 1;
-            // For x==0 the neighbours pFM[x-1] don't exist; upstream relies
-            // on the field_map being zero-initialised and the inner loop
-            // starts at x=1 so pFM[-1] reads zero from the byte just
-            // before. We replicate by checking the bounds.
-            const fm_l = if (x > 0) pFM[x - 1] else 0;
-            const fm_c = pFM[x];
-            const fm_r = if (x + 1 < w) pFM[x + 1] else 0;
-            const fmB_l = if (x > 0) pFMB[x - 1] else 0;
-            const fmB_c = pFMB[x];
-            const fmB_r = if (x + 1 < w) pFMB[x + 1] else 0;
+            const fm_l = fm_at(field_map_scratch, fm_base + xi - 1, buf_len);
+            const fm_c = fm_at(field_map_scratch, fm_base + xi, buf_len);
+            const fm_r = fm_at(field_map_scratch, fm_base + xi + 1, buf_len);
+            const fmB_l = fm_at(field_map_scratch, fmB_base + xi - 1, buf_len);
+            const fmB_c = fm_at(field_map_scratch, fmB_base + xi, buf_len);
+            const fmB_r = fm_at(field_map_scratch, fmB_base + xi + 1, buf_len);
             const need_blend = (fm_l == 1 or fm_c == 1 or fm_r == 1) or (fmB_l == 1 or fmB_c == 1 or fmB_r == 1);
             const blended: u8 = @intCast((@as(u16, pC[x]) + @as(u16, pBB[x]) + 1) >> 1);
             pDB[x] = if (need_blend) blended else pB[x];

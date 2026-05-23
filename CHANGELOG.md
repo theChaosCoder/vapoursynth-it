@@ -4,6 +4,47 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
+## [1.3.1] — 2026-05-23
+
+Patch release. Performance-only — pixel output unchanged from 1.3.0
+on every supported parameter combination.
+
+### Changes
+
+- **SIMD coverage extended** to the three output-stage functions in
+  `src/output.zig`:
+  - `simpleBlur` (diMode=2): 32-lane motion-hit count + 16-lane luma
+    body with overlap-loaded 3-tap motion neighbours.
+  - `deintOneField` (diMode=3, default): 16-lane luma body using
+    cross-row field-map OR-mask + pavgb + `@select`; chroma
+    unconditional via tight LANES/2 pass.
+  - `deinterlace` (diMode=1): 32-lane luma with all five IV scores +
+    `@select`-chain min-pick + motion override.
+- **ARM64 binaries** included by default (Linux aarch64 + macOS
+  aarch64) since the 1.3.0 release-workflow rework.
+
+### Speed delta vs 1.3.0 (720x480 NTSC, ReleaseFast, best-of-3)
+
+| Pipeline           | 1.3.0    | 1.3.1    | Δ            |
+| ------------------ | -------: | -------: | -----------: |
+| fps=30             | 3217 fps | 3175 fps | ~0 (noise)   |
+| fps=24             | 3148 fps | 3023 fps | ~0           |
+| fps=24 diMode=1    | 3041 fps | 3215 fps | +5.7%        |
+| fps=24 blend=1     | 2353 fps | 2301 fps | ~0           |
+
+The default fps=24/fps=30 paths don't move measurably because most
+frames on telecined NTSC content classify as ip='P' and skip the
+deinterlacer entirely. Workloads that hit ip='I' frequently
+(interlaced-heavy content, or `pthreshold=1`-forced runs) see the
+diMode=1 gain on every frame.
+
+### Bit-exactness
+
+Default-path 720-frame regression against the API-4 upstream port
+still passes byte-for-byte. `diMode=1` SIMD was independently
+verified against the pre-SIMD scalar build (80 frames, all md5s
+identical).
+
 ## [1.3.0] — 2026-05-23
 
 Initial release. A from-scratch Zig port of the VapourSynth-IT

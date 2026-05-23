@@ -20,6 +20,21 @@ const eval_iv_mod = @import("eval_iv.zig");
 const scene_mod = @import("scene.zig");
 const decide_mod = @import("decide.zig");
 const output_mod = @import("output.zig");
+const blend_mod = @import("blend.zig");
+
+/// Field-order parameter values. Upstream's `ref="TOP"` corresponds to
+/// `REF_PREV` semantics in the Avisynth original (match against previous
+/// frame). The VS upstream port simplified this away and only supports the
+/// `top` mode; we expose the parameter for compatibility with Avisynth
+/// scripts but only `top` is fully implemented today.
+pub const Ref = enum { top, bottom, all, none };
+
+/// Deinterlace strategy when a frame is classified interlaced (ip='I').
+/// Upstream VapourSynth hardcodes `one_field`; the Avisynth original
+/// supports four modes. We implement `none` and `one_field`; `deinterlace`
+/// and `simple_blur` would need their Avisynth implementations ported and
+/// currently raise an error.
+pub const DiMode = enum(u8) { none = 0, deinterlace = 1, simple_blur = 2, one_field = 3 };
 
 const MAX_WIDTH = 8192;
 
@@ -76,6 +91,10 @@ pub const Filter = struct {
     pthreshold: i32,
     pthreshold_adj: i32,
 
+    ref: Ref,
+    blend: bool,
+    dimode: DiMode,
+
     width: i32,
     height: i32,
     max_frames: i32,
@@ -93,6 +112,9 @@ pub const Filter = struct {
         fps: i32,
         threshold: i32,
         pthreshold: i32,
+        ref: Ref,
+        blend: bool,
+        dimode: DiMode,
     ) !*Filter {
         const max_frames = vi_src.numFrames;
         const width = vi_src.width;
@@ -122,6 +144,10 @@ pub const Filter = struct {
             .threshold = threshold,
             .pthreshold = pthreshold,
             .pthreshold_adj = plane.adjPara(pthreshold, width, height),
+            .ref = ref,
+            // Avisynth: blend is ignored when fps != 24. Fold that here.
+            .blend = blend and fps == 24,
+            .dimode = dimode,
             .width = width,
             .height = height,
             .max_frames = max_frames,
@@ -205,6 +231,55 @@ pub fn create(
         return;
     }
 
+    // ref: "TOP" (default), "BOTTOM", "ALL", "NONE" — Avisynth-compatible.
+    // Currently only "TOP" is fully supported; the others would require
+    // the next-frame-evaluation path the VS upstream stripped from
+    // ChooseBest. Until that's ported we reject them explicitly so users
+    // don't get silently-wrong output.
+    const ref_str = mapGetDataDefault(api, in.?, "ref", "TOP");
+    const ref_val: Ref = blk: {
+        if (strEqlCi(ref_str, "TOP")) break :blk .top;
+        if (strEqlCi(ref_str, "BOTTOM")) break :blk .bottom;
+        if (strEqlCi(ref_str, "ALL")) break :blk .all;
+        if (strEqlCi(ref_str, "NONE")) break :blk .none;
+        api.mapSetError.?(out_map, "IT: ref must be one of \"TOP\", \"BOTTOM\", \"ALL\", \"NONE\"");
+        api.freeNode.?(node);
+        return;
+    };
+    if (ref_val != .top) {
+        api.mapSetError.?(out_map,
+            "IT: ref=\"BOTTOM\"/\"ALL\"/\"NONE\" is recognised but not yet implemented in the Zig port " ++
+            "(would need the prev/next-frame evaluation path the VapourSynth upstream removed).");
+        api.freeNode.?(node);
+        return;
+    }
+
+    const blend = mapGetIntDefault(api, in.?, "blend", 0) != 0;
+
+    // diMode: 0=NONE (copy with field-match only), 1=DEINTERLACE,
+    // 2=SIMPLE_BLUR, 3=ONE_FIELD (the VS upstream default; what we
+    // implement today). 1 and 2 would need the original Avisynth
+    // implementations ported.
+    const dimode_int = mapGetIntDefault(api, in.?, "diMode", 3);
+    const dimode_val: DiMode = switch (dimode_int) {
+        0 => .none,
+        1 => .deinterlace,
+        2 => .simple_blur,
+        3 => .one_field,
+        else => {
+            api.mapSetError.?(out_map, "IT: diMode must be 0, 1, 2 or 3");
+            api.freeNode.?(node);
+            return;
+        },
+    };
+    if (dimode_val == .deinterlace or dimode_val == .simple_blur) {
+        api.mapSetError.?(out_map,
+            "IT: diMode=1 (DEINTERLACE) and diMode=2 (SIMPLE_BLUR) are not yet ported. " ++
+            "Use diMode=0 (NONE) or diMode=3 (ONE_FIELD, default).");
+        api.freeNode.?(node);
+        return;
+    }
+
     const inst = Filter.create(
         std.heap.c_allocator,
         node,
@@ -212,6 +287,9 @@ pub fn create(
         fps,
         threshold,
         pthreshold,
+        ref_val,
+        blend,
+        dimode_val,
     ) catch {
         api.mapSetError.?(out_map, "IT: out of memory");
         api.freeNode.?(node);
@@ -272,7 +350,11 @@ fn getFrame(
     inst.call_state.resetForFrame(n);
 
     var input_n: i32 = n;
+    var base24: i32 = 0;
+    var tf24: i32 = 0;
     if (inst.fps == 24) {
+        tf24 = n + @divTrunc(n, 4);
+        base24 = @divTrunc(tf24, 5) * 5;
         input_n = resolveInputFrame24(inst, api, ctx, n);
     } else {
         getFrameSub(inst, api, ctx, n);
@@ -281,7 +363,12 @@ fn getFrame(
     const dst_opt = api.newVideoFrame.?(&inst.vi.format, inst.vi.width, inst.vi.height, null, core);
     if (dst_opt == null) return null;
     const dst = dst_opt.?;
-    makeOutput(inst, api, ctx, dst, input_n);
+
+    if (inst.fps == 24 and shouldBlendBlock(inst, base24)) {
+        blendInto(inst, api, ctx, core, dst, base24, tf24);
+    } else {
+        makeOutput(inst, api, ctx, dst, input_n);
+    }
     return dst;
 }
 
@@ -303,10 +390,16 @@ fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_
         const tf = out_n + @divTrunc(out_n, 4);
         const base = @divTrunc(tf, 5) * 5;
         // Range to cover: GetFrameSub(base..base+4) -> [base-1, base+5],
-        // plus DrawPrevFrame on the chosen input frame which is within
-        // [base, base+4] -> can extend to [base-2, base+6].
-        var i: i32 = base - 2;
-        while (i <= base + 6) : (i += 1) {
+        // plus DrawPrevFrame on the chosen input frame within [base, base+4]
+        // -> can extend to [base-2, base+6]. When blend=true the algorithm
+        // additionally renders MakeOutput for source frames in
+        // [base-1, base+5] (blend kernel size 3 with start in [-1, 3]),
+        // and each of those drawPrevFrame paths reaches another ±2 — so
+        // we widen to [base-3, base+7] for that case.
+        const lo: i32 = if (inst.blend) base - 3 else base - 2;
+        const hi: i32 = if (inst.blend) base + 7 else base + 6;
+        var i: i32 = lo;
+        while (i <= hi) : (i += 1) {
             const clipped = plane.clipFrame(i, inst.max_frames);
             api.requestFrameFilter.?(clipped, inst.node, ctx);
         }
@@ -317,6 +410,61 @@ fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_
             api.requestFrameFilter.?(clipped, inst.node, ctx);
         }
     }
+}
+
+/// Returns true if `blend=true` actually triggers blending for this 5-frame
+/// block — gated by motion thresholds the Avisynth original computes from
+/// the cached diffS0/diffS1 stats. Mirrors the `flag` heuristic at di.cpp
+/// line 3181.
+fn shouldBlendBlock(inst: *Filter, base: i32) bool {
+    if (!inst.blend) return false;
+    var min_d: i32 = inst.frame_info[@intCast(plane.clipFrame(base, inst.max_frames))].diffS1;
+    var avg_d: i32 = 0;
+    var i: i32 = 0;
+    while (i < 5) : (i += 1) {
+        const idx: usize = @intCast(plane.clipFrame(base + i, inst.max_frames));
+        min_d = @min(min_d, inst.frame_info[idx].diffS1);
+        avg_d += inst.frame_info[idx].diffS0;
+    }
+    const thr = plane.adjPara(1000, inst.width, inst.height);
+    if (min_d < thr) return false;
+    // The C `((avgD - minD) / 4) / 3` is signed truncation; replicate exactly.
+    const secondary = @divTrunc(@divTrunc(avg_d - min_d, 4), 3);
+    if (min_d < secondary) return false;
+    return true;
+}
+
+/// `BlendFrame_YV12` analogue: render each source frame via MakeOutput,
+/// then run the temporal blend. Allocates `size` temporary VSFrames.
+fn blendInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, core: ?*c.VSCore, dst: *c.VSFrame, base: i32, tf_frame: i32) void {
+    const kernel = blend_mod.buildKernel(tf_frame - base);
+    const size: usize = @intCast(kernel.size);
+
+    var srcs: [16]blend_mod.SourceView = undefined;
+    var temps: [16]?*c.VSFrame = .{null} ** 16;
+    defer for (temps[0..size]) |t| if (t) |f| api.freeFrame.?(f);
+
+    var z: usize = 0;
+    while (z < size) : (z += 1) {
+        const fno = plane.clipFrame(base + kernel.start + @as(i32, @intCast(z)), inst.max_frames);
+        const tmp_opt = api.newVideoFrame.?(&inst.vi.format, inst.vi.width, inst.vi.height, null, core);
+        if (tmp_opt == null) return;
+        const tmp = tmp_opt.?;
+        temps[z] = tmp;
+        makeOutput(inst, api, ctx, tmp, fno);
+        const v = viewOfMut(api, tmp);
+        srcs[z] = .{
+            .y = v.y, .y_stride = v.y_stride,
+            .u = v.u, .u_stride = v.u_stride,
+            .v = v.v, .v_stride = v.v_stride,
+        };
+    }
+
+    const vD = viewOfMut(api, dst);
+    blend_mod.blendFrames(
+        inst.width, inst.height, kernel, srcs[0..size],
+        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
+    );
 }
 
 fn resolveInputFrame24(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_n: i32) i32 {
@@ -477,8 +625,21 @@ fn makeOutput(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFra
 
     if (inst.frame_info[ni].ip == 'P') {
         copyCpnInto(inst, api, ctx, dst, n);
-    } else if (!drawPrevFrame(inst, api, ctx, dst, n)) {
-        deintInto(inst, api, ctx, dst, n);
+        return;
+    }
+    // ip == 'I': dispatch on diMode.
+    switch (inst.dimode) {
+        .none => {
+            // DI_MODE_NONE in Avisynth: skip the deinterlacer, just field-copy.
+            copyCpnInto(inst, api, ctx, dst, n);
+        },
+        .one_field => {
+            if (!drawPrevFrame(inst, api, ctx, dst, n)) {
+                deintInto(inst, api, ctx, dst, n);
+            }
+        },
+        // .deinterlace, .simple_blur are rejected at create() time.
+        else => unreachable,
     }
 }
 
@@ -634,4 +795,29 @@ fn mapGetIntDefault(
     const v = api.mapGetIntSaturated.?(map, key, 0, &err);
     if (err != 0) return default;
     return v;
+}
+
+fn mapGetDataDefault(
+    api: c.VSAPI,
+    map: *const c.VSMap,
+    key: [*:0]const u8,
+    default: []const u8,
+) []const u8 {
+    var err: c_int = 0;
+    const ptr = api.mapGetData.?(map, key, 0, &err);
+    if (err != 0 or ptr == null) return default;
+    var sz_err: c_int = 0;
+    const sz = api.mapGetDataSize.?(map, key, 0, &sz_err);
+    if (sz_err != 0 or sz <= 0) return default;
+    return ptr[0..@intCast(sz)];
+}
+
+fn strEqlCi(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        const la = if (ca >= 'A' and ca <= 'Z') ca + 32 else ca;
+        const lb = if (cb >= 'A' and cb <= 'Z') cb + 32 else cb;
+        if (la != lb) return false;
+    }
+    return true;
 }

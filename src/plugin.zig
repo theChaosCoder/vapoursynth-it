@@ -28,7 +28,13 @@ export fn VapourSynthPluginInit2(
     );
     _ = vspapi.registerFunction.?(
         "IT",
-        "clip:vnode;fps:int:opt;threshold:int:opt;pthreshold:int:opt;",
+        "clip:vnode;" ++
+            "fps:int:opt;" ++
+            "threshold:int:opt;" ++
+            "pthreshold:int:opt;" ++
+            "ref:data:opt;" ++       // "TOP" | "BOTTOM" | "ALL" | "NONE"
+            "blend:int:opt;" ++      // 0|1 — motion-blended 24p, fps=24 only
+            "diMode:int:opt;",       // 0=NONE, 1=DEINTERLACE, 2=SIMPLE_BLUR, 3=ONE_FIELD (default)
         "clip:vnode;",
         filter.create,
         null,
@@ -46,6 +52,7 @@ test {
     _ = @import("scene.zig");
     _ = @import("decide.zig");
     _ = @import("output.zig");
+    _ = @import("blend.zig");
 }
 
 test "validateInput rejects non-YUV420P8" {

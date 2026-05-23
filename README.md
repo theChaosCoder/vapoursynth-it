@@ -18,8 +18,9 @@ integration test grid and on real-world telecined NTSC VOB samples.
 | Frame properties | ✅ standard + diagnostic |
 | SIMD via `@Vector` | ✅ ~2× over scalar, ~4× over VIVTC VFM |
 | Cross-compile Linux / macOS / Windows x86_64 | ✅ |
-| CI workflow | ⏳ pending |
+| CI workflow | ✅ (lint + unit + cross + best-effort integration) |
 | v1.3.0 release | ✅ |
+| AI-assisted port | ✅ Anthropic's Claude — verified byte-for-byte against the upstream C reference |
 
 ## Quick start
 

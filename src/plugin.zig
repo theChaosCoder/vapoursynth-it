@@ -219,6 +219,7 @@ test {
     _ = @import("motion.zig");
     _ = @import("scene.zig");
     _ = @import("decide.zig");
+    _ = @import("output.zig");
 }
 
 test "validateInput rejects non-YUV420P8" {

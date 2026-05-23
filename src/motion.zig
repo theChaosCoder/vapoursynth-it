@@ -10,12 +10,104 @@
 
 const std = @import("std");
 const plane = @import("plane.zig");
+const simd = @import("simd.zig");
 
 inline fn absDiffU8(a: u8, b: u8) u8 {
     return if (a > b) a - b else b - a;
 }
 
 const MAX_WIDTH = 8192;
+const CHROMA_LANES = 16;
+
+/// Generic core for makeMotionMap2{Max,Min}. The two only differ in their
+/// final per-pixel combine (`@max` vs `@min`); everything else is identical.
+inline fn makeMotionMap2Common(
+    comptime use_max: bool,
+    width: i32,
+    height: i32,
+    even_rows_only: bool,
+    dst: []u8,
+    prev_y: [*]const u8, prev_y_stride: usize,
+    prev_u: [*]const u8, prev_u_stride: usize,
+    prev_v: [*]const u8, prev_v_stride: usize,
+    curr_y: [*]const u8, curr_y_stride: usize,
+    curr_u: [*]const u8, curr_u_stride: usize,
+    curr_v: [*]const u8, curr_v_stride: usize,
+    next_y: [*]const u8, next_y_stride: usize,
+    next_u: [*]const u8, next_u_stride: usize,
+    next_v: [*]const u8, next_v_stride: usize,
+) void {
+    const w: usize = @intCast(width);
+    const twidth: usize = @intCast(@divTrunc(width, 2));
+    const y_step: i32 = if (even_rows_only) 2 else 1;
+
+    var y: i32 = 0;
+    while (y < height) : (y += y_step) {
+        const pD = dst[@as(usize, @intCast(y)) * w ..][0..w];
+        const pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
+        const pP = plane.syp(prev_y, prev_y_stride, height, 0, y);
+        const pN = plane.syp(next_y, next_y_stride, height, 0, y);
+        const pC_U = plane.syp(curr_u, curr_u_stride, height, 1, y);
+        const pP_U = plane.syp(prev_u, prev_u_stride, height, 1, y);
+        const pN_U = plane.syp(next_u, next_u_stride, height, 1, y);
+        const pC_V = plane.syp(curr_v, curr_v_stride, height, 2, y);
+        const pP_V = plane.syp(prev_v, prev_v_stride, height, 2, y);
+        const pN_V = plane.syp(next_v, next_v_stride, height, 2, y);
+
+        var i: usize = 0;
+        while (i + CHROMA_LANES <= twidth) : (i += CHROMA_LANES) {
+            const c_y = simd.load(CHROMA_LANES * 2, pC, i * 2);
+            const p_y = simd.load(CHROMA_LANES * 2, pP, i * 2);
+            const n_y = simd.load(CHROMA_LANES * 2, pN, i * 2);
+            const c_u = simd.load(CHROMA_LANES, pC_U, i);
+            const p_u = simd.load(CHROMA_LANES, pP_U, i);
+            const n_u = simd.load(CHROMA_LANES, pN_U, i);
+            const c_v = simd.load(CHROMA_LANES, pC_V, i);
+            const p_v = simd.load(CHROMA_LANES, pP_V, i);
+            const n_v = simd.load(CHROMA_LANES, pN_V, i);
+
+            const py = simd.absDiff(CHROMA_LANES * 2, c_y, p_y);
+            const pu = simd.absDiff(CHROMA_LANES, c_u, p_u);
+            const pv = simd.absDiff(CHROMA_LANES, c_v, p_v);
+            const puv = @max(pu, pv);
+            const p_lane = @max(py, simd.expandPairs(CHROMA_LANES, puv));
+
+            const ny = simd.absDiff(CHROMA_LANES * 2, c_y, n_y);
+            const nu = simd.absDiff(CHROMA_LANES, c_u, n_u);
+            const nv = simd.absDiff(CHROMA_LANES, c_v, n_v);
+            const nuv = @max(nu, nv);
+            const n_lane = @max(ny, simd.expandPairs(CHROMA_LANES, nuv));
+
+            const combined = if (use_max) @max(p_lane, n_lane) else @min(p_lane, n_lane);
+            simd.store(CHROMA_LANES * 2, pD.ptr, i * 2, combined);
+        }
+        while (i < twidth) : (i += 1) {
+            const py_l = absDiffU8(pC[i * 2], pP[i * 2]);
+            const py_h = absDiffU8(pC[i * 2 + 1], pP[i * 2 + 1]);
+            const pu = absDiffU8(pC_U[i], pP_U[i]);
+            const pv = absDiffU8(pC_V[i], pP_V[i]);
+            const puv = @max(pu, pv);
+            const pl = @max(puv, py_l);
+            const ph = @max(puv, py_h);
+
+            const ny_l = absDiffU8(pC[i * 2], pN[i * 2]);
+            const ny_h = absDiffU8(pC[i * 2 + 1], pN[i * 2 + 1]);
+            const nu = absDiffU8(pC_U[i], pN_U[i]);
+            const nv = absDiffU8(pC_V[i], pN_V[i]);
+            const nuv = @max(nu, nv);
+            const nl = @max(nuv, ny_l);
+            const nh = @max(nuv, ny_h);
+
+            if (use_max) {
+                pD[i * 2] = @max(pl, nl);
+                pD[i * 2 + 1] = @max(ph, nh);
+            } else {
+                pD[i * 2] = @min(pl, nl);
+                pD[i * 2 + 1] = @min(ph, nh);
+            }
+        }
+    }
+}
 
 /// Result of makeMotionMap — what upstream stores into m_frameInfo[n].
 pub const MotionStats = struct {
@@ -53,12 +145,46 @@ pub fn makeMotionMap(
         const pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
         const pP = plane.syp(prev_y, prev_y_stride, height, 0, y);
 
-        var i: usize = 0;
-        while (i < w) : (i += 1) {
-            bufP0[i] = @as(i16, pC[i]) - @as(i16, pP[i]);
+        // Pass 1: bufP0[i] = pC[i] - pP[i] (i16). Element-wise vectorisable.
+        {
+            const LANES = 16;
+            var i: usize = 0;
+            while (i + LANES <= w) : (i += LANES) {
+                const c: @Vector(LANES, u8) = pC[i..][0..LANES].*;
+                const p: @Vector(LANES, u8) = pP[i..][0..LANES].*;
+                const c16: @Vector(LANES, i16) = c;
+                const p16: @Vector(LANES, i16) = p;
+                bufP0[i..][0..LANES].* = c16 - p16;
+            }
+            while (i < w) : (i += 1) {
+                bufP0[i] = @as(i16, pC[i]) - @as(i16, pP[i]);
+            }
         }
 
+        // Pass 2: bufP1[i] = clamp(|B| - |A + C - 2B|, 0, 255)
+        // where (A,B,C) = bufP0[i-1, i, i+1].
         var ii: i32 = 8;
+        {
+            const LANES = 16;
+            const zero16: @Vector(LANES, i16) = @splat(0);
+            const c255: @Vector(LANES, i16) = @splat(255);
+            const two: @Vector(LANES, i16) = @splat(2);
+            const widthminus8_u: usize = @intCast(widthminus8);
+            var uii: usize = @intCast(ii);
+            while (uii + LANES <= widthminus8_u) : (uii += LANES) {
+                const A: @Vector(LANES, i16) = bufP0[uii - 1 ..][0..LANES].*;
+                const B: @Vector(LANES, i16) = bufP0[uii ..][0..LANES].*;
+                const C: @Vector(LANES, i16) = bufP0[uii + 1 ..][0..LANES].*;
+                const delta_signed = A + C - two * B;
+                const delta_abs = @select(i16, delta_signed < zero16, -delta_signed, delta_signed);
+                const absB = @select(i16, B < zero16, -B, B);
+                const s = absB - delta_abs;
+                const s_clamped = @max(@min(s, c255), zero16);
+                const s_u8: @Vector(LANES, u8) = @intCast(s_clamped);
+                bufP1[uii..][0..LANES].* = s_u8;
+            }
+            ii = @intCast(uii);
+        }
         while (ii < widthminus8) : (ii += 1) {
             const ui: usize = @intCast(ii);
             const A = bufP0[ui - 1];
@@ -76,9 +202,33 @@ pub fn makeMotionMap(
             bufP1[ui] = @intCast(s);
         }
 
+        // Pass 3: count bufP1[i-1] + bufP1[i+1] + bufP1[i] > 36 / 18.
         var tsum: i32 = 0;
         var tsum1: i32 = 0;
         ii = 16;
+        {
+            const LANES = 16;
+            const widthminus16_u: usize = @intCast(widthminus16);
+            const th36: @Vector(LANES, u16) = @splat(36);
+            const th18: @Vector(LANES, u16) = @splat(18);
+            const ones: @Vector(LANES, u8) = @splat(1);
+            const zeros: @Vector(LANES, u8) = @splat(0);
+            var uii: usize = @intCast(ii);
+            while (uii + LANES <= widthminus16_u) : (uii += LANES) {
+                const A: @Vector(LANES, u8) = bufP1[uii - 1 ..][0..LANES].*;
+                const B: @Vector(LANES, u8) = bufP1[uii + 1 ..][0..LANES].*;
+                const C: @Vector(LANES, u8) = bufP1[uii ..][0..LANES].*;
+                const ABC: @Vector(LANES, u16) =
+                    @as(@Vector(LANES, u16), A) +
+                    @as(@Vector(LANES, u16), B) +
+                    @as(@Vector(LANES, u16), C);
+                const mask1: @Vector(LANES, bool) = ABC > th36;
+                const mask2: @Vector(LANES, bool) = ABC > th18;
+                tsum += @reduce(.Add, @as(@Vector(LANES, u16), @select(u8, mask1, ones, zeros)));
+                tsum1 += @reduce(.Add, @as(@Vector(LANES, u16), @select(u8, mask2, ones, zeros)));
+            }
+            ii = @intCast(uii);
+        }
         while (ii < widthminus16) : (ii += 1) {
             const ui: usize = @intCast(ii);
             const A: i32 = @as(i32, bufP1[ui - 1]);
@@ -128,44 +278,10 @@ pub fn makeMotionMap2Min(
     next_v: [*]const u8, next_v_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    const w: usize = @intCast(width);
-    const twidth: usize = @intCast(@divTrunc(width, 2));
-
-    var y: i32 = 0;
-    while (y < height) : (y += 2) {
-        const pD = dst[@as(usize, @intCast(y)) * w ..][0..w];
-        const pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
-        const pP = plane.syp(prev_y, prev_y_stride, height, 0, y);
-        const pN = plane.syp(next_y, next_y_stride, height, 0, y);
-        const pC_U = plane.syp(curr_u, curr_u_stride, height, 1, y);
-        const pP_U = plane.syp(prev_u, prev_u_stride, height, 1, y);
-        const pN_U = plane.syp(next_u, next_u_stride, height, 1, y);
-        const pC_V = plane.syp(curr_v, curr_v_stride, height, 2, y);
-        const pP_V = plane.syp(prev_v, prev_v_stride, height, 2, y);
-        const pN_V = plane.syp(next_v, next_v_stride, height, 2, y);
-
-        var i: usize = 0;
-        while (i < twidth) : (i += 1) {
-            const py_l = absDiffU8(pC[i * 2], pP[i * 2]);
-            const py_h = absDiffU8(pC[i * 2 + 1], pP[i * 2 + 1]);
-            const pu = absDiffU8(pC_U[i], pP_U[i]);
-            const pv = absDiffU8(pC_V[i], pP_V[i]);
-            const puv = @max(pu, pv);
-            const pl = @max(puv, py_l);
-            const ph = @max(puv, py_h);
-
-            const ny_l = absDiffU8(pC[i * 2], pN[i * 2]);
-            const ny_h = absDiffU8(pC[i * 2 + 1], pN[i * 2 + 1]);
-            const nu = absDiffU8(pC_U[i], pN_U[i]);
-            const nv = absDiffU8(pC_V[i], pN_V[i]);
-            const nuv = @max(nu, nv);
-            const nl = @max(nuv, ny_l);
-            const nh = @max(nuv, ny_h);
-
-            pD[i * 2] = @min(pl, nl);
-            pD[i * 2 + 1] = @min(ph, nh);
-        }
-    }
+    makeMotionMap2Common(false, width, height, true, dst,
+        prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride,
+        curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride,
+        next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
 }
 
 /// MakeMotionMap2Max_YV12 — max per-pixel motion between (prev, curr) and
@@ -186,46 +302,10 @@ pub fn makeMotionMap2Max(
     next_v: [*]const u8, next_v_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    const w: usize = @intCast(width);
-    const twidth: usize = @intCast(@divTrunc(width, 2));
-
-    var y: i32 = 0;
-    while (y < height) : (y += 1) {
-        const pD = dst[@as(usize, @intCast(y)) * w ..][0..w];
-        const pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
-        const pP = plane.syp(prev_y, prev_y_stride, height, 0, y);
-        const pN = plane.syp(next_y, next_y_stride, height, 0, y);
-        const pC_U = plane.syp(curr_u, curr_u_stride, height, 1, y);
-        const pP_U = plane.syp(prev_u, prev_u_stride, height, 1, y);
-        const pN_U = plane.syp(next_u, next_u_stride, height, 1, y);
-        const pC_V = plane.syp(curr_v, curr_v_stride, height, 2, y);
-        const pP_V = plane.syp(prev_v, prev_v_stride, height, 2, y);
-        const pN_V = plane.syp(next_v, next_v_stride, height, 2, y);
-
-        var i: usize = 0;
-        while (i < twidth) : (i += 1) {
-            // prev -> curr
-            const py_l = absDiffU8(pC[i * 2], pP[i * 2]);
-            const py_h = absDiffU8(pC[i * 2 + 1], pP[i * 2 + 1]);
-            const pu = absDiffU8(pC_U[i], pP_U[i]);
-            const pv = absDiffU8(pC_V[i], pP_V[i]);
-            const puv = @max(pu, pv);
-            const pl = @max(puv, py_l);
-            const ph = @max(puv, py_h);
-
-            // curr -> next
-            const ny_l = absDiffU8(pC[i * 2], pN[i * 2]);
-            const ny_h = absDiffU8(pC[i * 2 + 1], pN[i * 2 + 1]);
-            const nu = absDiffU8(pC_U[i], pN_U[i]);
-            const nv = absDiffU8(pC_V[i], pN_V[i]);
-            const nuv = @max(nu, nv);
-            const nl = @max(nuv, ny_l);
-            const nh = @max(nuv, ny_h);
-
-            pD[i * 2] = @max(pl, nl);
-            pD[i * 2 + 1] = @max(ph, nh);
-        }
-    }
+    makeMotionMap2Common(true, width, height, false, dst,
+        prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride,
+        curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride,
+        next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
 }
 
 /// MakeSimpleBlurMap_YV12 — computes a "did the line need to be interpolated"
@@ -256,7 +336,22 @@ pub fn makeSimpleBlurMap(
             pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
             pB = plane.syp(ref_y, ref_y_stride, height, 0, y + 1);
         }
+        const LANES = 32;
         var i: usize = 0;
+        // SIMD body: 32 pixels per iteration via saturating u8 arithmetic.
+        // Original formula `max(0, min(255, ct + cb) - 2*tb)` maps exactly to
+        // `(ct +| cb) -| (tb +| tb)` element-wise (psubusb / paddusb).
+        while (i + LANES <= w) : (i += LANES) {
+            const c = simd.load(LANES, pC, i);
+            const t = simd.load(LANES, pT, i);
+            const b = simd.load(LANES, pB, i);
+            const ct = simd.absDiff(LANES, c, t);
+            const cb = simd.absDiff(LANES, c, b);
+            const tb = simd.absDiff(LANES, t, b);
+            const tb2 = tb +| tb;
+            const delta = (ct +| cb) -| tb2;
+            simd.store(LANES, pD.ptr, i, delta);
+        }
         while (i < w) : (i += 1) {
             const cval = pC[i];
             const t = pT[i];

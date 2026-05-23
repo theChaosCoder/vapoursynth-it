@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const plane = @import("plane.zig");
+const simd = @import("simd.zig");
 
 inline fn absDiffI(a: u8, b: u8) i32 {
     return if (a > b) @as(i32, a - b) else @as(i32, b - a);
@@ -21,15 +22,29 @@ pub fn checkSceneChange(
     // Upstream iterates `x < rowSize = vsapi->getStride(srcC, 0)` here, i.e.
     // it walks over the stride, not just the visible width. We preserve that
     // behaviour bit-for-bit by using `curr_stride` as the inner-loop bound.
+    const stride_u: usize = curr_stride;
     const stride_i: i32 = @intCast(curr_stride);
     var sum: i64 = 0;
+    const LANES = 32;
+    const threshold_vec: @Vector(LANES, u8) = @splat(50);
     var y: i32 = 1;
     while (y < height) : (y += 2) {
         const pC = plane.syp(curr_y, curr_stride, height, 0, y);
         const pP = plane.syp(prev_y, prev_stride, height, 0, y);
-        var x: i32 = 0;
-        while (x < stride_i) : (x += 1) {
-            if (absDiffI(pC[@intCast(x)], pP[@intCast(x)]) > 50) sum += 1;
+        var x: usize = 0;
+        while (x + LANES <= stride_u) : (x += LANES) {
+            const c = simd.load(LANES, pC, x);
+            const p = simd.load(LANES, pP, x);
+            const d = simd.absDiff(LANES, c, p);
+            const mask: @Vector(LANES, bool) = d > threshold_vec;
+            // Sum the count of true lanes.
+            const ones: @Vector(LANES, u8) = @select(u8, mask,
+                @as(@Vector(LANES, u8), @splat(1)),
+                @as(@Vector(LANES, u8), @splat(0)));
+            sum += @reduce(.Add, @as(@Vector(LANES, u16), ones));
+        }
+        while (x < stride_u) : (x += 1) {
+            if (absDiffI(pC[x], pP[x]) > 50) sum += 1;
         }
     }
     const threshold: i64 = @divTrunc(@as(i64, height) * @as(i64, stride_i), 8);

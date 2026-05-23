@@ -53,6 +53,7 @@ test {
     _ = @import("decide.zig");
     _ = @import("output.zig");
     _ = @import("blend.zig");
+    _ = @import("simd.zig");
 }
 
 test "validateInput rejects non-YUV420P8" {

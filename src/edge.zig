@@ -11,6 +11,9 @@
 
 const std = @import("std");
 const plane = @import("plane.zig");
+const simd = @import("simd.zig");
+
+const CHROMA_LANES = 16; // -> 32 luma lanes per SIMD iteration
 
 /// Absolute difference of two u8 values, returning u8.
 inline fn absDiffU8(a: u8, b: u8) u8 {
@@ -75,6 +78,27 @@ pub fn makeDeMap(
         const pED = edge_out[row_offset * w_usize ..][0..w_usize];
 
         var i: usize = 0;
+        // SIMD main loop: process CHROMA_LANES chroma + 2*CHROMA_LANES luma per iter.
+        while (i + CHROMA_LANES <= twidth) : (i += CHROMA_LANES) {
+            const c_y = simd.load(CHROMA_LANES * 2, pC, i * 2);
+            const t_y = simd.load(CHROMA_LANES * 2, pTT, i * 2);
+            const b_y = simd.load(CHROMA_LANES * 2, pBB, i * 2);
+            const c_u = simd.load(CHROMA_LANES, pC_U, i);
+            const t_u = simd.load(CHROMA_LANES, pTT_U, i);
+            const b_u = simd.load(CHROMA_LANES, pBB_U, i);
+            const c_v = simd.load(CHROMA_LANES, pC_V, i);
+            const t_v = simd.load(CHROMA_LANES, pTT_V, i);
+            const b_v = simd.load(CHROMA_LANES, pBB_V, i);
+
+            const de_y = simd.absDiff(CHROMA_LANES * 2, c_y, simd.pavgb(CHROMA_LANES * 2, t_y, b_y));
+            const de_u = simd.absDiff(CHROMA_LANES, c_u, simd.pavgb(CHROMA_LANES, t_u, b_u));
+            const de_v = simd.absDiff(CHROMA_LANES, c_v, simd.pavgb(CHROMA_LANES, t_v, b_v));
+            const de_uv = @max(de_u, de_v);
+            const de_uv_expanded = simd.expandPairs(CHROMA_LANES, de_uv);
+            const result = @max(de_y, de_uv_expanded);
+            simd.store(CHROMA_LANES * 2, pED.ptr, i * 2, result);
+        }
+        // Scalar tail
         while (i < twidth) : (i += 1) {
             const ly = makeDeMapAsm(pC, pTT, pBB, i, 2, 0);
             const hy = makeDeMapAsm(pC, pTT, pBB, i, 2, 1);

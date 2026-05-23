@@ -9,6 +9,7 @@
 const std = @import("std");
 const plane = @import("plane.zig");
 const edge_mod = @import("edge.zig");
+const simd = @import("simd.zig");
 
 inline fn absDiffU8(a: u8, b: u8) u8 {
     return if (a > b) a - b else b - a;
@@ -33,6 +34,14 @@ inline fn evalIvAsm(eax: [*]const u8, ebx: [*]const u8, ecx: [*]const u8, i: usi
 /// Saturated u8 subtract: `a > b ? a - b : 0`.
 inline fn subSat(a: u8, b: u8) u8 {
     return if (a > b) a - b else 0;
+}
+
+/// SIMD eval-iv kernel for N lanes: min(|a-b|, |a-c|, |a - pavgb(b,c)|).
+inline fn evalIvVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c: @Vector(N, u8)) @Vector(N, u8) {
+    const ab = simd.absDiff(N, a, b);
+    const ac = simd.absDiff(N, a, c);
+    const a_bc = simd.absDiff(N, a, simd.pavgb(N, b, c));
+    return @min(@min(ab, ac), a_bc);
 }
 
 /// Result of EvalIV: how many pixels look interlaced (counter) and how
@@ -103,6 +112,48 @@ pub fn evalIv(
         const peB = edge_map[eB_row * w ..][0..w];
 
         var i: usize = 16;
+        const LANES = 16; // chroma; luma uses 32
+
+        // SIMD body
+        const th_v: @Vector(32, u8) = @splat(th);
+        const th2_v: @Vector(32, u8) = @splat(th2);
+        const zeros: @Vector(32, u8) = @splat(0);
+        const ones: @Vector(32, u8) = @splat(1);
+        while (i + LANES <= widthminus16) : (i += LANES) {
+            // Luma kernel over 32 contiguous bytes (covers lanes i*2..i*2+31).
+            const c_y = simd.load(32, pC, i * 2);
+            const t_y = simd.load(32, pT, i * 2);
+            const b_y = simd.load(32, pB, i * 2);
+            const yk = evalIvVec(32, c_y, t_y, b_y);
+
+            // Chroma kernel over 16 bytes (covers lanes i..i+15).
+            const c_u = simd.load(LANES, pC_U, i);
+            const t_u = simd.load(LANES, pT_U, i);
+            const b_u = simd.load(LANES, pB_U, i);
+            const uk = evalIvVec(LANES, c_u, t_u, b_u);
+
+            const c_v = simd.load(LANES, pC_V, i);
+            const t_v = simd.load(LANES, pT_V, i);
+            const b_v = simd.load(LANES, pB_V, i);
+            const vk = evalIvVec(LANES, c_v, t_v, b_v);
+
+            const uvk = @max(uk, vk);
+            var mm0 = @max(yk, simd.expandPairs(LANES, uvk));
+
+            const peC32 = simd.load(32, peC.ptr, i * 2);
+            const peT32 = simd.load(32, peT.ptr, i * 2);
+            const peB32 = simd.load(32, peB.ptr, i * 2);
+            const pe = @max(@max(peC32, peT32), peB32);
+
+            mm0 = mm0 -| pe;
+            mm0 = mm0 -| pe;
+
+            const mask1: @Vector(32, bool) = mm0 > th_v;
+            const mask2: @Vector(32, bool) = mm0 > th2_v;
+            sum += @reduce(.Add, @as(@Vector(32, u16), @select(u8, mask1, ones, zeros)));
+            sum2 += @reduce(.Add, @as(@Vector(32, u16), @select(u8, mask2, ones, zeros)));
+        }
+        // Scalar tail
         while (i < widthminus16) : (i += 1) {
             const yl = evalIvAsm(pC, pT, pB, i * 2);
             const yh = evalIvAsm(pC, pT, pB, i * 2 + 1);

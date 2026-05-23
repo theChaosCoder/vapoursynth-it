@@ -30,6 +30,9 @@ venv/
 *.swp
 .DS_Store
 
+# Local venv used for VapourSynth smoke tests
+encode_test/
+
 # Reference build artifacts (when building the C++ upstream locally for golden hashes)
 reference/vapoursynth-cpp/config.mak
 reference/vapoursynth-cpp/config.log

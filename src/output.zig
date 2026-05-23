@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const plane = @import("plane.zig");
+const simd = @import("simd.zig");
 const motion = @import("motion.zig");
 
 /// Copies one byte-row from src to dst using independent strides.
@@ -191,7 +192,71 @@ pub fn deintOneField(
             }
         }.get;
 
+        const D_LANES = 16;
+        // The field-map reads at offset (fm_base ± xi-1 .. fm_base ± xi+1)
+        // are safe for the bulk of the buffer; only the very first byte
+        // (when fm_base=0 and x=0 → idx = -1) and the very last byte
+        // (when fmB_base=last_row and x=w-1 → idx = h*w) ever spill.
+        // We scalar-handle x=0 + the trailing tail and SIMD the middle.
         var x: usize = 0;
+        // Scalar prologue: x=0
+        if (w > 0) {
+            const x_half = @as(usize, 0);
+            const fm_l = fm_at(field_map_scratch, fm_base - 1, buf_len);
+            const fm_c = fm_at(field_map_scratch, fm_base, buf_len);
+            const fm_r = fm_at(field_map_scratch, fm_base + 1, buf_len);
+            const fmB_l = fm_at(field_map_scratch, fmB_base - 1, buf_len);
+            const fmB_c = fm_at(field_map_scratch, fmB_base, buf_len);
+            const fmB_r = fm_at(field_map_scratch, fmB_base + 1, buf_len);
+            const need_blend = (fm_l == 1 or fm_c == 1 or fm_r == 1) or (fmB_l == 1 or fmB_c == 1 or fmB_r == 1);
+            const blended: u8 = @intCast((@as(u16, pC[0]) + @as(u16, pBB[0]) + 1) >> 1);
+            pDB[0] = if (need_blend) blended else pB[0];
+            if (@mod(y >> 1, 2) != 0) {
+                pDB_U[x_half] = @intCast((@as(u16, pC_U[x_half]) + @as(u16, pBB_U[x_half]) + 1) >> 1);
+                pDB_V[x_half] = @intCast((@as(u16, pC_V[x_half]) + @as(u16, pBB_V[x_half]) + 1) >> 1);
+            }
+            x = 1;
+        }
+
+        // SIMD body — m_l reads from fm_base+x-1, m_r reads up to fm_base+x+LANES.
+        // Both must stay within the buffer; the loop bound `x+LANES+1 <= w`
+        // ensures both rows' reads stay within their respective rows.
+        const fm_zero: @Vector(D_LANES, u8) = @splat(0);
+        while (x + D_LANES + 1 <= w) : (x += D_LANES) {
+            const fm_off: usize = @intCast(fm_base + @as(isize, @intCast(x)));
+            const fmB_off: usize = @intCast(fmB_base + @as(isize, @intCast(x)));
+            const m_l = simd.load(D_LANES, field_map_scratch.ptr, fm_off - 1);
+            const m_c = simd.load(D_LANES, field_map_scratch.ptr, fm_off);
+            const m_r = simd.load(D_LANES, field_map_scratch.ptr, fm_off + 1);
+            const mB_l = simd.load(D_LANES, field_map_scratch.ptr, fmB_off - 1);
+            const mB_c = simd.load(D_LANES, field_map_scratch.ptr, fmB_off);
+            const mB_r = simd.load(D_LANES, field_map_scratch.ptr, fmB_off + 1);
+            const or_mask = m_l | m_c | m_r | mB_l | mB_c | mB_r;
+            const blend_mask: @Vector(D_LANES, bool) = or_mask != fm_zero;
+
+            const c_v = simd.load(D_LANES, pC, x);
+            const bb_v = simd.load(D_LANES, pBB, x);
+            const b_v = simd.load(D_LANES, pB, x);
+            const blended = simd.pavgb(D_LANES, c_v, bb_v);
+            const result = @select(u8, blend_mask, blended, b_v);
+            simd.store(D_LANES, pDB, x, result);
+
+            // Chroma is unconditional (no need_blend dependency) — always
+            // the vertical pavgb. Process D_LANES/2 chroma bytes per luma
+            // chunk so the indices stay aligned.
+            if (@mod(y >> 1, 2) != 0) {
+                const xh: usize = x >> 1;
+                const HC = D_LANES / 2;
+                const pcu = simd.load(HC, pC_U, xh);
+                const pbu = simd.load(HC, pBB_U, xh);
+                simd.store(HC, pDB_U, xh, simd.pavgb(HC, pcu, pbu));
+                const pcv = simd.load(HC, pC_V, xh);
+                const pbv = simd.load(HC, pBB_V, xh);
+                simd.store(HC, pDB_V, xh, simd.pavgb(HC, pcv, pbv));
+            }
+        }
+
+        // Scalar tail
         while (x < w) : (x += 1) {
             const xi: isize = @intCast(x);
             const x_half = x >> 1;
@@ -228,6 +293,18 @@ inline fn ivKernel(a: u8, b: u8, c: u8) u8 {
     const a_bc = if (a > bc) a - bc else bc - a;
     return @min(@min(ab, ac), a_bc);
 }
+
+/// SIMD version of `ivKernel`. Returns the per-lane minimum of |a-b|,
+/// |a-c| and |a - pavgb(b, c)| — the deinterlacer's interlace-evidence
+/// metric, computed in parallel over `N` pixels.
+inline fn ivKernelVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c: @Vector(N, u8)) @Vector(N, u8) {
+    const ab = simd.absDiff(N, a, b);
+    const ac = simd.absDiff(N, a, c);
+    const bc = simd.pavgb(N, b, c);
+    const a_bc = simd.absDiff(N, a, bc);
+    return @min(@min(ab, ac), a_bc);
+}
+
 
 inline fn pavgb(a: u8, b: u8) u8 {
     return @intCast((@as(u16, a) + @as(u16, b) + 1) >> 1);
@@ -330,7 +407,191 @@ pub fn deinterlace(
         const pD_U = plane.dyp(dst_u, dst_u_stride, height, 1, y);
         const pD_V = plane.dyp(dst_v, dst_v_stride, height, 2, y);
 
-        var x: usize = 0;
+        // SIMD body for luma: process LL pixels per iter. Chroma is kept
+        // scalar (run in the same x-loop) because the upstream "last write
+        // wins" pattern across pair-of-luma needs awkward mask sub-sampling
+        // to replicate in SIMD; the chroma is half the data anyway.
+        const LL = 32;
+        const LC = LL / 2;
+        const ivk_th: @Vector(LL, u8) = @splat(8);
+        const motion_th: @Vector(LL, u8) = @splat(12);
+        var xx: usize = 0;
+        while (xx + LL <= w) : (xx += LL) {
+            // Load luma planes
+            const v_t = simd.load(LL, pT, xx);
+            const v_c = simd.load(LL, pC, xx);
+            const v_b = simd.load(LL, pB, xx);
+            const v_p = simd.load(LL, pP, xx);
+            const v_n = simd.load(LL, pN, xx);
+
+            // Luma 5-score
+            const ivc_l_v = ivKernelVec(LL, v_c, v_t, v_b);
+            const ivp_l_v = ivKernelVec(LL, v_p, v_t, v_b);
+            const ivn_l_v = ivKernelVec(LL, v_n, v_t, v_b);
+            const cp_v = simd.pavgb(LL, v_c, v_p);
+            const cn_v = simd.pavgb(LL, v_c, v_n);
+            const ivcp_l_v = ivKernelVec(LL, cp_v, v_t, v_b);
+            const ivcn_l_v = ivKernelVec(LL, cn_v, v_t, v_b);
+
+            // Chroma scores: process LC chroma bytes for each plane
+            const xhh = xx >> 1;
+            const u_t = simd.load(LC, pT_U, xhh);
+            const u_c = simd.load(LC, pC_U, xhh);
+            const u_b = simd.load(LC, pB_U, xhh);
+            const u_p = simd.load(LC, pP_U, xhh);
+            const u_n = simd.load(LC, pN_U, xhh);
+            const v_t_v = simd.load(LC, pT_V, xhh);
+            const v_c_v = simd.load(LC, pC_V, xhh);
+            const v_b_v = simd.load(LC, pB_V, xhh);
+            const v_p_v = simd.load(LC, pP_V, xhh);
+            const v_n_v = simd.load(LC, pN_V, xhh);
+
+            const ivc_u_s = ivKernelVec(LC, u_c, u_t, u_b);
+            const ivc_v_s = ivKernelVec(LC, v_c_v, v_t_v, v_b_v);
+            const ivp_u_s = ivKernelVec(LC, u_p, u_t, u_b);
+            const ivp_v_s = ivKernelVec(LC, v_p_v, v_t_v, v_b_v);
+            const ivn_u_s = ivKernelVec(LC, u_n, u_t, u_b);
+            const ivn_v_s = ivKernelVec(LC, v_n_v, v_t_v, v_b_v);
+            const cp_u = simd.pavgb(LC, u_c, u_p);
+            const cp_v_c = simd.pavgb(LC, v_c_v, v_p_v);
+            const cn_u = simd.pavgb(LC, u_c, u_n);
+            const cn_v_c = simd.pavgb(LC, v_c_v, v_n_v);
+            const ivcp_u_s = ivKernelVec(LC, cp_u, u_t, u_b);
+            const ivcp_v_s = ivKernelVec(LC, cp_v_c, v_t_v, v_b_v);
+            const ivcn_u_s = ivKernelVec(LC, cn_u, u_t, u_b);
+            const ivcn_v_s = ivKernelVec(LC, cn_v_c, v_t_v, v_b_v);
+
+            // max(U, V) per chroma byte
+            const ivc_uv_c = @max(ivc_u_s, ivc_v_s);
+            const ivp_uv_c = @max(ivp_u_s, ivp_v_s);
+            const ivn_uv_c = @max(ivn_u_s, ivn_v_s);
+            const ivcp_uv_c = @max(ivcp_u_s, ivcp_v_s);
+            const ivcn_uv_c = @max(ivcn_u_s, ivcn_v_s);
+
+            // Broadcast chroma scores to luma pairs
+            const ivc_uv_v = simd.expandPairs(LC, ivc_uv_c);
+            const ivp_uv_v = simd.expandPairs(LC, ivp_uv_c);
+            const ivn_uv_v = simd.expandPairs(LC, ivn_uv_c);
+            const ivcp_uv_v = simd.expandPairs(LC, ivcp_uv_c);
+            const ivcn_uv_v = simd.expandPairs(LC, ivcn_uv_c);
+
+            // Combined luma+chroma per-pixel scores
+            const ivc_v = @max(ivc_l_v, ivc_uv_v);
+            var ivp_v_ = @max(ivp_l_v, ivp_uv_v);
+            var ivn_v_ = @max(ivn_l_v, ivn_uv_v);
+            const ivcp_v_ = @max(ivcp_l_v, ivcp_uv_v);
+            const ivcn_v_ = @max(ivcn_l_v, ivcn_uv_v);
+
+            // Candidate pixels (luma side)
+            var pix_p_v = v_p;
+            var pix_n_v = v_n;
+
+            // CP / CN substitution: if averaged variant has lower iv, use it
+            const use_cp: @Vector(LL, bool) = ivcp_v_ < ivp_v_;
+            pix_p_v = @select(u8, use_cp, cp_v, pix_p_v);
+            ivp_v_ = @select(u8, use_cp, ivcp_v_, ivp_v_);
+            const use_cn: @Vector(LL, bool) = ivcn_v_ < ivn_v_;
+            pix_n_v = @select(u8, use_cn, cn_v, pix_n_v);
+            ivn_v_ = @select(u8, use_cn, ivcn_v_, ivn_v_);
+
+            // Pick min(ivc, ivp, ivn) with the original tie-break semantics
+            const n_lt_p: @Vector(LL, bool) = ivn_v_ < ivp_v_;
+            const pix_np = @select(u8, n_lt_p, pix_n_v, pix_p_v);
+            const iv_np = @select(u8, n_lt_p, ivn_v_, ivp_v_);
+            const c_wins: @Vector(LL, bool) = ivc_v < iv_np;
+            const result_no_motion = @select(u8, c_wins, v_c, pix_np);
+            const final_iv = @select(u8, c_wins, ivc_v, iv_np);
+
+            // Motion-gated vertical-average override
+            const mt_v = simd.load(LL, pmMT.ptr, xx);
+            const mb_v = simd.load(LL, pmMB.ptr, xx);
+            const motion_high: @Vector(LL, bool) = (mt_v > motion_th) | (mb_v > motion_th);
+            const iv_high: @Vector(LL, bool) = final_iv > ivk_th;
+            const draw_mask = iv_high & motion_high;
+            const vavg = simd.pavgb(LL, v_t, v_b);
+            const result = @select(u8, draw_mask, vavg, result_no_motion);
+            simd.store(LL, pD, xx, result);
+
+            // Chroma writes: scalar to preserve "last write of luma pair
+            // wins" semantics. Skipped entirely when row parity says no.
+            if (@mod(y >> 1, 2) != 0) {
+                var xc = xx;
+                while (xc < xx + LL) : (xc += 1) {
+                    const xch = xc >> 1;
+                    const ic_l = ivKernel(pC[xc], pT[xc], pB[xc]);
+                    const ip_l = ivKernel(pP[xc], pT[xc], pB[xc]);
+                    const in_l = ivKernel(pN[xc], pT[xc], pB[xc]);
+                    const icp_l = ivKernel(pavgb(pC[xc], pP[xc]), pT[xc], pB[xc]);
+                    const icn_l = ivKernel(pavgb(pC[xc], pN[xc]), pT[xc], pB[xc]);
+                    const ic_u = ivKernel(pC_U[xch], pT_U[xch], pB_U[xch]);
+                    const ic_v = ivKernel(pC_V[xch], pT_V[xch], pB_V[xch]);
+                    const ic_uv = @max(ic_u, ic_v);
+                    const ip_u = ivKernel(pP_U[xch], pT_U[xch], pB_U[xch]);
+                    const ip_v = ivKernel(pP_V[xch], pT_V[xch], pB_V[xch]);
+                    const ip_uv = @max(ip_u, ip_v);
+                    const in_u = ivKernel(pN_U[xch], pT_U[xch], pB_U[xch]);
+                    const in_v = ivKernel(pN_V[xch], pT_V[xch], pB_V[xch]);
+                    const in_uv = @max(in_u, in_v);
+                    const icp_u = ivKernel(pavgb(pC_U[xch], pP_U[xch]), pT_U[xch], pB_U[xch]);
+                    const icp_v = ivKernel(pavgb(pC_V[xch], pP_V[xch]), pT_V[xch], pB_V[xch]);
+                    const icp_uv = @max(icp_u, icp_v);
+                    const icn_u = ivKernel(pavgb(pC_U[xch], pN_U[xch]), pT_U[xch], pB_U[xch]);
+                    const icn_v = ivKernel(pavgb(pC_V[xch], pN_V[xch]), pT_V[xch], pB_V[xch]);
+                    const icn_uv = @max(icn_u, icn_v);
+                    const ic_s: u8 = @max(ic_l, ic_uv);
+                    var ip_s: u8 = @max(ip_l, ip_uv);
+                    var in_s: u8 = @max(in_l, in_uv);
+                    const icp_s: u8 = @max(icp_l, icp_uv);
+                    const icn_s: u8 = @max(icn_l, icn_uv);
+                    var pc_u: u8 = pC_U[xch];
+                    var pn_u: u8 = pN_U[xch];
+                    var pp_u: u8 = pP_U[xch];
+                    var pc_v: u8 = pC_V[xch];
+                    var pn_v: u8 = pN_V[xch];
+                    var pp_v: u8 = pP_V[xch];
+                    _ = &pc_u;
+                    _ = &pc_v;
+                    if (icp_s < ip_s) {
+                        pp_u = pavgb(pc_u, pp_u);
+                        pp_v = pavgb(pc_v, pp_v);
+                        ip_s = icp_s;
+                    }
+                    if (icn_s < in_s) {
+                        pn_u = pavgb(pc_u, pn_u);
+                        pn_v = pavgb(pc_v, pn_v);
+                        in_s = icn_s;
+                    }
+                    var iv_s: u8 = 0;
+                    if (in_s < ip_s) {
+                        if (ic_s < in_s) {
+                            pD_U[xch] = pc_u;
+                            pD_V[xch] = pc_v;
+                            iv_s = ic_s;
+                        } else {
+                            pD_U[xch] = pn_u;
+                            pD_V[xch] = pn_v;
+                            iv_s = in_s;
+                        }
+                    } else {
+                        if (ic_s < ip_s) {
+                            pD_U[xch] = pc_u;
+                            pD_V[xch] = pc_v;
+                            iv_s = ic_s;
+                        } else {
+                            pD_U[xch] = pp_u;
+                            pD_V[xch] = pp_v;
+                            iv_s = ip_s;
+                        }
+                    }
+                    if (iv_s > 8 and (pmMT[xc] > 12 or pmMB[xc] > 12)) {
+                        pD_U[xch] = pB_U[xch];
+                        pD_V[xch] = pB_V[xch];
+                    }
+                }
+            }
+        }
+
+        var x: usize = xx;
         while (x < w) : (x += 1) {
             const xh = x >> 1;
 
@@ -482,19 +743,30 @@ pub fn simpleBlur(
     // Pass 1: count motion-tagged pixels to decide if we should blur every
     // pixel (when motion is widespread enough that selectivity hurts).
     var motion_hits: usize = 0;
-    var y: i32 = 0;
-    while (y < height) : (y += 1) {
-        const row_off: usize = @intCast(plane.clipY(y, height));
-        const row = motion4di[row_off * w ..][0..w];
-        var x: usize = 0;
-        while (x < w) : (x += 1) {
-            if (row[x] > 4) motion_hits += 1;
+    {
+        const LANES = 32;
+        const th_v: @Vector(LANES, u8) = @splat(4);
+        const ones: @Vector(LANES, u8) = @splat(1);
+        const zeros: @Vector(LANES, u8) = @splat(0);
+        var y: i32 = 0;
+        while (y < height) : (y += 1) {
+            const row_off: usize = @intCast(plane.clipY(y, height));
+            const row = motion4di[row_off * w ..][0..w];
+            var x: usize = 0;
+            while (x + LANES <= w) : (x += LANES) {
+                const v = simd.load(LANES, row.ptr, x);
+                const mask: @Vector(LANES, bool) = v > th_v;
+                motion_hits += @reduce(.Add, @as(@Vector(LANES, u16), @select(u8, mask, ones, zeros)));
+            }
+            while (x < w) : (x += 1) {
+                if (row[x] > 4) motion_hits += 1;
+            }
         }
     }
     const all_pixel = motion_hits > (w * h) >> 1;
 
     // Pass 2: blur or copy per pixel.
-    y = 0;
+    var y: i32 = 0;
     while (y < height) : (y += 1) {
         var pT: [*]const u8 = undefined;
         var pC: [*]const u8 = undefined;
@@ -532,10 +804,84 @@ pub fn simpleBlur(
         const pD_U = plane.dyp(dst_u, dst_u_stride, height, 1, y);
         const pD_V = plane.dyp(dst_v, dst_v_stride, height, 2, y);
 
+        const SB_LANES = 16;
+        // SIMD main path: process SB_LANES consecutive luma pixels at a time.
+        // We avoid the SIMD body for x=0 and the trailing tail because the
+        // overlap-loads of pmMC[x-1] / pmMC[x+SB_LANES] need both neighbours
+        // to be in-row. Chroma writes are deferred to the scalar loop because
+        // every second luma pixel overwrites the same chroma byte (upstream
+        // quirk), and emulating that pattern in SIMD adds more complexity
+        // than the chroma savings justify.
         var x: usize = 0;
+        // Scalar prologue for x=0 only.
+        if (w > 0) {
+            const m_l: u8 = 0;
+            const m_c: u8 = pmMC[0];
+            const m_r: u8 = if (w > 1) pmMC[1] else 0;
+            const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
+            if (do_blur) {
+                pD[0] = @intCast((@as(u16, pT[0]) + @as(u16, pB[0]) + (@as(u16, pC[0]) << 1)) >> 2);
+                if (@mod(y >> 1, 2) != 0) {
+                    pD_U[0] = @intCast((@as(u16, pT_U[0]) + @as(u16, pB_U[0]) + (@as(u16, pC_U[0]) << 1)) >> 2);
+                    pD_V[0] = @intCast((@as(u16, pT_V[0]) + @as(u16, pB_V[0]) + (@as(u16, pC_V[0]) << 1)) >> 2);
+                }
+            } else {
+                pD[0] = pC[0];
+                if (@mod(y >> 1, 2) != 0) {
+                    pD_U[0] = pC_U[0];
+                    pD_V[0] = pC_V[0];
+                }
+            }
+            x = 1;
+        }
+        // SIMD body — bounds: m_l reads from x-1, m_r reads up to x+SB_LANES.
+        // Both must stay within [0, w-1], so we need 1 <= x and x+SB_LANES <= w-1.
+        const sb_th: @Vector(SB_LANES, u8) = @splat(12);
+        while (x + SB_LANES + 1 <= w) : (x += SB_LANES) {
+            const m_l = simd.load(SB_LANES, pmMC.ptr, x - 1);
+            const m_c = simd.load(SB_LANES, pmMC.ptr, x);
+            const m_r = simd.load(SB_LANES, pmMC.ptr, x + 1);
+            const motion_mask: @Vector(SB_LANES, bool) =
+                (m_l > sb_th) | (m_c > sb_th) | (m_r > sb_th);
+            const blur_mask: @Vector(SB_LANES, bool) =
+                motion_mask | @as(@Vector(SB_LANES, bool), @splat(all_pixel));
+
+            const c = simd.load(SB_LANES, pC, x);
+            const t = simd.load(SB_LANES, pT, x);
+            const b = simd.load(SB_LANES, pB, x);
+            const c16: @Vector(SB_LANES, u16) = c;
+            const t16: @Vector(SB_LANES, u16) = t;
+            const b16: @Vector(SB_LANES, u16) = b;
+            const blur_u16 = (t16 + b16 + (c16 << @as(@Vector(SB_LANES, u4), @splat(1)))) >>
+                @as(@Vector(SB_LANES, u4), @splat(2));
+            const blur: @Vector(SB_LANES, u8) = @intCast(blur_u16);
+
+            const result = @select(u8, blur_mask, blur, c);
+            simd.store(SB_LANES, pD, x, result);
+
+            // Chroma: re-run scalar for the corresponding pair-of-luma indices
+            // so we preserve upstream's "second luma pixel of the pair wins"
+            // behaviour for the chroma write.
+            if (@mod(y >> 1, 2) != 0) {
+                var xc = x;
+                while (xc < x + SB_LANES) : (xc += 1) {
+                    const ml: u8 = pmMC[xc - 1];
+                    const mc: u8 = pmMC[xc];
+                    const mr: u8 = pmMC[xc + 1];
+                    const do_blur_c = all_pixel or ml > 12 or mc > 12 or mr > 12;
+                    const xh = xc >> 1;
+                    if (do_blur_c) {
+                        pD_U[xh] = @intCast((@as(u16, pT_U[xh]) + @as(u16, pB_U[xh]) + (@as(u16, pC_U[xh]) << 1)) >> 2);
+                        pD_V[xh] = @intCast((@as(u16, pT_V[xh]) + @as(u16, pB_V[xh]) + (@as(u16, pC_V[xh]) << 1)) >> 2);
+                    } else {
+                        pD_U[xh] = pC_U[xh];
+                        pD_V[xh] = pC_V[xh];
+                    }
+                }
+            }
+        }
+        // Scalar epilogue
         while (x < w) : (x += 1) {
-            // Upstream's `pmMC[x-1]` and `pmMC[x+1]` overshoot the row at
-            // x=0 / x=w-1; we clamp those reads to 0 here.
             const m_l: u8 = if (x > 0) pmMC[x - 1] else 0;
             const m_c: u8 = pmMC[x];
             const m_r: u8 = if (x + 1 < w) pmMC[x + 1] else 0;

@@ -141,7 +141,7 @@ Plus ~100 LoC of API glue (plugin init, filter create, property getters).
 
 ### Phase 0 — Bootstrap & repo
 
-- [x] Initialise local git repo in ``
+- [x] Initialise local git repo
 - [x] Take `LICENSE` from upstream (GPL-2.0)
 - [x] Create `README.md` with "work in progress" notice (later expanded)
 - [x] `.gitignore` (zig-out/, zig-cache/, .zig-cache/, build/, *.so, *.dll, *.dylib, __pycache__)

@@ -92,6 +92,12 @@ pub const Filter = struct {
     pthreshold_adj: i32,
 
     ref: Ref,
+    /// Derived from `ref`: true if previous-frame match is a candidate.
+    /// `top` and `all` enable it.
+    b_ref_p: bool,
+    /// Derived from `ref`: true if next-frame match is a candidate.
+    /// `bottom` and `all` enable it.
+    b_ref_n: bool,
     blend: bool,
     dimode: DiMode,
 
@@ -145,6 +151,13 @@ pub const Filter = struct {
             .pthreshold = pthreshold,
             .pthreshold_adj = plane.adjPara(pthreshold, width, height),
             .ref = ref,
+            // Mirror Avisynth's m_bRefP / m_bRefN derivation:
+            //   TOP   -> bRefP only           (= upstream default)
+            //   BOTTOM -> bRefN only
+            //   ALL   -> both
+            //   NONE  -> neither (ChooseBest skipped entirely)
+            .b_ref_p = (ref == .top or ref == .all),
+            .b_ref_n = (ref == .bottom or ref == .all),
             // Avisynth: blend is ignored when fps != 24. Fold that here.
             .blend = blend and fps == 24,
             .dimode = dimode,
@@ -231,11 +244,8 @@ pub fn create(
         return;
     }
 
-    // ref: "TOP" (default), "BOTTOM", "ALL", "NONE" — Avisynth-compatible.
-    // Currently only "TOP" is fully supported; the others would require
-    // the next-frame-evaluation path the VS upstream stripped from
-    // ChooseBest. Until that's ported we reject them explicitly so users
-    // don't get silently-wrong output.
+    // ref: "TOP" (default), "BOTTOM", "ALL", "NONE" — all four
+    // Avisynth-compatible modes are implemented.
     const ref_str = mapGetDataDefault(api, in.?, "ref", "TOP");
     const ref_val: Ref = blk: {
         if (strEqlCi(ref_str, "TOP")) break :blk .top;
@@ -246,14 +256,6 @@ pub fn create(
         api.freeNode.?(node);
         return;
     };
-    if (ref_val != .top) {
-        api.mapSetError.?(out_map,
-            "IT: ref=\"BOTTOM\"/\"ALL\"/\"NONE\" is recognised but not yet implemented in the Zig port " ++
-            "(would need the prev/next-frame evaluation path the VapourSynth upstream removed).");
-        api.freeNode.?(node);
-        return;
-    }
-
     const blend = mapGetIntDefault(api, in.?, "blend", 0) != 0;
 
     // diMode: 0=NONE (copy with field-match only), 1=DEINTERLACE,
@@ -272,13 +274,6 @@ pub fn create(
             return;
         },
     };
-    if (dimode_val == .deinterlace or dimode_val == .simple_blur) {
-        api.mapSetError.?(out_map,
-            "IT: diMode=1 (DEINTERLACE) and diMode=2 (SIMPLE_BLUR) are not yet ported. " ++
-            "Use diMode=0 (NONE) or diMode=3 (ONE_FIELD, default).");
-        api.freeNode.?(node);
-        return;
-    }
 
     const inst = Filter.create(
         std.heap.c_allocator,
@@ -514,9 +509,14 @@ fn getFrameSub(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void
     inst.call_state.iSumP = init_sum;
     inst.call_state.iSumN = init_sum;
     inst.call_state.iSumM = init_sum;
-    inst.call_state.bRefP = true;
+    inst.call_state.bRefP = inst.b_ref_p;
 
-    chooseBest(inst, api, ctx, n);
+    // ref="NONE" skips ChooseBest entirely — leaves the iSum* values at
+    // their `width * height` defaults so every frame ends up ip='I' and is
+    // dispatched to the deinterlacer of choice. Matches Avisynth original.
+    if (inst.ref != .none) {
+        chooseBest(inst, api, ctx, n);
+    }
 
     const ni: usize = @intCast(n);
     inst.frame_info[ni].match = inst.call_state.iUseFrame;
@@ -552,11 +552,8 @@ fn getFrameSub(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void
 
 fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void {
     const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-    const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
     defer api.freeFrame.?(srcC);
-    defer api.freeFrame.?(srcP);
     const vC = viewOf(api, srcC.?);
-    const vP = viewOf(api, srcP.?);
 
     ensureMotionMap(inst, api, ctx, inst.call_state.currentFrame);
     ensureMotionMap(inst, api, ctx, inst.call_state.currentFrame + 1);
@@ -566,6 +563,8 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
     edge_mod.makeDeMap(inst.width, inst.height, 0, inst.call_state.edgeMap,
         vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
 
+    // Always evaluate against C (gives us iSumC / iSumPC, the "intrinsic"
+    // interlace evidence of the current frame).
     const ev_c = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
         inst.call_state.edgeMap,
         vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,  // src = C
@@ -573,14 +572,46 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
     inst.call_state.iSumC = ev_c.counter;
     inst.call_state.iSumPC = ev_c.counterp;
 
-    const ev_p = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
-        inst.call_state.edgeMap,
-        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,  // src = C
-        vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride); // ref = P
-    inst.call_state.iSumP = ev_p.counter;
-    inst.call_state.iSumPP = ev_p.counterp;
+    // Conditional N evaluation (ref="BOTTOM" or "ALL").
+    if (inst.b_ref_n) {
+        const srcN = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
+        defer api.freeFrame.?(srcN);
+        const vN = viewOf(api, srcN.?);
+        const ev_n = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
+            inst.call_state.edgeMap,
+            vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
+            vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+        inst.call_state.iSumN = ev_n.counter;
+        inst.call_state.iSumPN = ev_n.counterp;
+    }
 
-    _ = decide_mod.compCp(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state);
+    // Conditional P evaluation (ref="TOP" or "ALL").
+    if (inst.b_ref_p) {
+        const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
+        defer api.freeFrame.?(srcP);
+        const vP = viewOf(api, srcP.?);
+        const ev_p = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj,
+            inst.call_state.edgeMap,
+            vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
+            vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
+        inst.call_state.iSumP = ev_p.counter;
+        inst.call_state.iSumPP = ev_p.counterp;
+    }
+
+    // Dispatch on ref. For ref="ALL" pick the side with the smaller sum to
+    // run its CompC* — that's the candidate with stronger evidence.
+    switch (inst.ref) {
+        .top => _ = decide_mod.compCp(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state),
+        .bottom => _ = decide_mod.compCn(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state),
+        .all => {
+            if (inst.call_state.iSumP < inst.call_state.iSumN) {
+                _ = decide_mod.compCp(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state);
+            } else {
+                _ = decide_mod.compCn(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state);
+            }
+        },
+        .none => {}, // Caller guarantees we're not invoked when ref=NONE.
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -633,14 +664,86 @@ fn makeOutput(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFra
             // DI_MODE_NONE in Avisynth: skip the deinterlacer, just field-copy.
             copyCpnInto(inst, api, ctx, dst, n);
         },
+        .deinterlace => {
+            if (!drawPrevFrame(inst, api, ctx, dst, n)) {
+                deinterlaceInto(inst, api, ctx, dst, n);
+            }
+        },
+        .simple_blur => {
+            if (!drawPrevFrame(inst, api, ctx, dst, n)) {
+                simpleBlurInto(inst, api, ctx, dst, n);
+            }
+        },
         .one_field => {
             if (!drawPrevFrame(inst, api, ctx, dst, n)) {
                 deintInto(inst, api, ctx, dst, n);
             }
         },
-        // .deinterlace, .simple_blur are rejected at create() time.
-        else => unreachable,
     }
+}
+
+/// `Deinterlace_YV12` wrapper. Builds the motion4DI map via makeMotionMap2Min,
+/// then calls output_mod.deinterlace.
+fn deinterlaceInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
+    const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
+    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
+    const srcN = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
+    defer api.freeFrame.?(srcP);
+    defer api.freeFrame.?(srcC);
+    defer api.freeFrame.?(srcN);
+    const vP = viewOf(api, srcP.?);
+    const vC = viewOf(api, srcC.?);
+    const vN = viewOf(api, srcN.?);
+
+    motion_mod.makeMotionMap2Min(inst.width, inst.height,
+        inst.call_state.motionMap4DI,
+        vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride,
+        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
+        vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+
+    const vD = viewOfMut(api, dst);
+    output_mod.deinterlace(inst.width, inst.height,
+        inst.call_state.motionMap4DI,
+        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
+        vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride,
+        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
+        vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+}
+
+/// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds
+/// the blur map into the per-instance motionMap4DI scratch buffer, then
+/// calls `output_mod.simpleBlur` to write into dst.
+fn simpleBlurInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
+    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
+    defer api.freeFrame.?(srcC);
+    const vC = viewOf(api, srcC.?);
+
+    var srcR_opt: ?*const c.VSFrame = null;
+    var vR: FrameView = vC;
+    switch (toUpper(inst.call_state.iUseFrame)) {
+        'P' => {
+            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
+            vR = viewOf(api, srcR_opt.?);
+        },
+        'N' => {
+            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
+            vR = viewOf(api, srcR_opt.?);
+        },
+        else => {},
+    }
+    defer if (srcR_opt) |r| api.freeFrame.?(r);
+
+    motion_mod.makeSimpleBlurMap(inst.width, inst.height,
+        inst.call_state.motionMap4DI,
+        vC.y, vC.y_stride,
+        vR.y, vR.y_stride);
+
+    const vD = viewOfMut(api, dst);
+    output_mod.simpleBlur(inst.width, inst.height,
+        inst.call_state.motionMap4DI,
+        vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride,
+        vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride,
+        vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
 }
 
 fn copyCpnInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {

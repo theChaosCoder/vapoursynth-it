@@ -116,6 +116,86 @@ pub fn compCp(
     return true;
 }
 
+/// Mirror of compCp for the N (next-frame) candidate. Ported from
+/// `reference/avisynth/src/di.cpp::CompCN`. Used when `ref="BOTTOM"`, or
+/// when `ref="ALL"` picks the N branch because `sumP >= sumN`.
+pub fn compCn(
+    cur_frame: i32,
+    width: i32,
+    height: i32,
+    max_frames: i32,
+    frame_info: []CFrameInfo,
+    cs: *CallState,
+) bool {
+    const n = cur_frame;
+    const ni: usize = @intCast(n);
+    const np1: usize = @intCast(plane.clipFrame(n + 1, max_frames));
+
+    const p0 = frame_info[ni].diffP0;
+    const p1 = frame_info[ni].diffP1;
+    const n0 = frame_info[np1].diffP0;
+    const n1 = frame_info[np1].diffP1;
+    const ps0 = frame_info[ni].diffS0;
+    const ps1 = frame_info[ni].diffS1;
+    const ns0 = frame_info[np1].diffS0;
+    const ns1 = frame_info[np1].diffS1;
+
+    const th = plane.adjPara(5, width, height);
+    const thm = plane.adjPara(5, width, height);
+    const ths = plane.adjPara(200, width, height);
+
+    const spe = p0 < th and ps0 < ths;
+    const spo = p1 < th and ps1 < ths;
+    const sne = n0 < th and ns0 < ths;
+    const sno = n1 < th and ns1 < ths;
+
+    const mpe = p0 > thm;
+    const mpo = p1 > thm;
+    const mne = n0 > thm;
+    const mno = n1 > thm;
+
+    const thcomb: i64 = plane.adjPara(20, width, height);
+
+    if (n != 0) {
+        const dc_n = if (cs.iSumC - cs.iSumN >= 0) cs.iSumC - cs.iSumN else cs.iSumN - cs.iSumC;
+        const sum_cn = cs.iSumC + cs.iSumN;
+        if ((cs.iSumC < thcomb and cs.iSumN < thcomb) or dc_n * 10 < sum_cn) {
+            if (dc_n > plane.adjPara(8, width, height)) {
+                cs.iUseFrame = if (cs.iSumN >= cs.iSumC) 'c' else 'n';
+                return true;
+            }
+            const dpc_pn = if (cs.iSumPC - cs.iSumPN >= 0) cs.iSumPC - cs.iSumPN else cs.iSumPN - cs.iSumPC;
+            if (dpc_pn > plane.adjPara(10, width, height)) {
+                cs.iUseFrame = if (cs.iSumPN >= cs.iSumPC) 'c' else 'n';
+                return true;
+            }
+
+            if (spe and mpo) { cs.iUseFrame = 'c'; return true; }
+            if (mpe and spo) { cs.iUseFrame = 'N'; return true; }
+            if (mne and sno) { cs.iUseFrame = 'c'; return true; }
+            if (sne and mno) { cs.iUseFrame = 'n'; return true; }
+            if (spe and spo) { cs.iUseFrame = 'c'; return false; }
+            if (sne and sno) { cs.iUseFrame = 'c'; return false; }
+            if (mpe and mpo and mne and mno) { cs.iUseFrame = 'c'; return false; }
+
+            if (cs.iSumPC > cs.iSumPN) { cs.iUseFrame = 'n'; return true; }
+            cs.iUseFrame = 'c';
+            return false;
+        }
+    }
+
+    frame_info[ni].pos = '.';
+    if (cs.iSumN >= cs.iSumC) {
+        cs.iUseFrame = 'C';
+        if (spe and mpo) frame_info[ni].pos = '2';
+    } else {
+        cs.iUseFrame = 'N';
+        if (spo and !sne) frame_info[ni].pos = '0';
+        if (mpo and sne) frame_info[ni].pos = '1';
+    }
+    return true;
+}
+
 /// 5-frame-block decimation decision. Marks the frame to drop via mflag and
 /// records it in block_info. Skips work if the block was already decided.
 pub fn decide(

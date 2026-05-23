@@ -105,6 +105,69 @@ pub fn makeMotionMap(
     };
 }
 
+/// `MakeMotionMap2_YV12` — per-pixel **minimum** motion between (prev, curr)
+/// and (curr, next). Same structure as makeMotionMap2Max but takes
+/// `min` at the final step. Used by the full DEINTERLACE deinterlacer
+/// (diMode=1) as a motion gate for forcing vertical-average overrides.
+///
+/// Note: upstream's MMX writes only at even rows (`y += 2`) so the odd
+/// rows of `dst` are left untouched. We preserve that — the deinterlacer
+/// only reads even rows anyway.
+pub fn makeMotionMap2Min(
+    width: i32,
+    height: i32,
+    dst: []u8,
+    prev_y: [*]const u8, prev_y_stride: usize,
+    prev_u: [*]const u8, prev_u_stride: usize,
+    prev_v: [*]const u8, prev_v_stride: usize,
+    curr_y: [*]const u8, curr_y_stride: usize,
+    curr_u: [*]const u8, curr_u_stride: usize,
+    curr_v: [*]const u8, curr_v_stride: usize,
+    next_y: [*]const u8, next_y_stride: usize,
+    next_u: [*]const u8, next_u_stride: usize,
+    next_v: [*]const u8, next_v_stride: usize,
+) void {
+    std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
+    const w: usize = @intCast(width);
+    const twidth: usize = @intCast(@divTrunc(width, 2));
+
+    var y: i32 = 0;
+    while (y < height) : (y += 2) {
+        const pD = dst[@as(usize, @intCast(y)) * w ..][0..w];
+        const pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
+        const pP = plane.syp(prev_y, prev_y_stride, height, 0, y);
+        const pN = plane.syp(next_y, next_y_stride, height, 0, y);
+        const pC_U = plane.syp(curr_u, curr_u_stride, height, 1, y);
+        const pP_U = plane.syp(prev_u, prev_u_stride, height, 1, y);
+        const pN_U = plane.syp(next_u, next_u_stride, height, 1, y);
+        const pC_V = plane.syp(curr_v, curr_v_stride, height, 2, y);
+        const pP_V = plane.syp(prev_v, prev_v_stride, height, 2, y);
+        const pN_V = plane.syp(next_v, next_v_stride, height, 2, y);
+
+        var i: usize = 0;
+        while (i < twidth) : (i += 1) {
+            const py_l = absDiffU8(pC[i * 2], pP[i * 2]);
+            const py_h = absDiffU8(pC[i * 2 + 1], pP[i * 2 + 1]);
+            const pu = absDiffU8(pC_U[i], pP_U[i]);
+            const pv = absDiffU8(pC_V[i], pP_V[i]);
+            const puv = @max(pu, pv);
+            const pl = @max(puv, py_l);
+            const ph = @max(puv, py_h);
+
+            const ny_l = absDiffU8(pC[i * 2], pN[i * 2]);
+            const ny_h = absDiffU8(pC[i * 2 + 1], pN[i * 2 + 1]);
+            const nu = absDiffU8(pC_U[i], pN_U[i]);
+            const nv = absDiffU8(pC_V[i], pN_V[i]);
+            const nuv = @max(nu, nv);
+            const nl = @max(nuv, ny_l);
+            const nh = @max(nuv, ny_h);
+
+            pD[i * 2] = @min(pl, nl);
+            pD[i * 2 + 1] = @min(ph, nh);
+        }
+    }
+}
+
 /// MakeMotionMap2Max_YV12 — max per-pixel motion between (prev, curr) and
 /// (curr, next), considering luma + max(U,V) chroma. Output is `width*height`
 /// bytes into `dst`.

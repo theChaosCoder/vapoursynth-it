@@ -201,6 +201,327 @@ pub fn deintOneField(
     _ = motion;
 }
 
+/// Compact reimplementation of upstream's `eval_iv_asm` for one pixel.
+/// Returns min(|a - b|, |a - c|, |a - (b+c+1)/2|). Used by `deinterlace`
+/// and matches the DEINTERLACE_ASM_1 / DEINTERLACE_ASM_2 macros from the
+/// Avisynth original.
+inline fn ivKernel(a: u8, b: u8, c: u8) u8 {
+    const ab = if (a > b) a - b else b - a;
+    const ac = if (a > c) a - c else c - a;
+    const bc: u8 = @intCast((@as(u16, b) + @as(u16, c) + 1) >> 1);
+    const a_bc = if (a > bc) a - bc else bc - a;
+    return @min(@min(ab, ac), a_bc);
+}
+
+inline fn pavgb(a: u8, b: u8) u8 {
+    return @intCast((@as(u16, a) + @as(u16, b) + 1) >> 1);
+}
+
+/// `Deinterlace_YV12` — diMode=1. The full Avisynth deinterlacer
+/// (`reference/avisynth/src/di.cpp:2194`). For each pixel of the bottom-field
+/// row, picks between C, P, N, avg(C,P) and avg(C,N) by minimum-IV score
+/// across luma+chroma. Falls back to vertical average (T+B)/2 when the
+/// motion map indicates strong motion AND the chosen score is high.
+///
+/// The caller must have pre-populated `motion4di` via
+/// `makeMotionMap2Min(prev, curr, next)`.
+///
+/// Algorithm produces per-pixel:
+///   bufC[x]  = max(luma_iv(pC, pT, pB),   chroma_iv broadcast for U,V)
+///   bufP[x]  = max(luma_iv(pP, pT, pB),   chroma_iv for P U,V)
+///   bufN[x]  = max(luma_iv(pN, pT, pB),   chroma_iv for N U,V)
+///   bufCP[x] = max(luma_iv(avg(pC,pP), pT, pB), chroma_iv for avg)
+///   bufCN[x] = max(luma_iv(avg(pC,pN), pT, pB), chroma_iv for avg)
+/// then picks the smallest score's pixel.
+pub fn deinterlace(
+    width: i32,
+    height: i32,
+    motion4di: []const u8,
+    dst_y: [*]u8, dst_y_stride: usize,
+    dst_u: [*]u8, dst_u_stride: usize,
+    dst_v: [*]u8, dst_v_stride: usize,
+    src_p_y: [*]const u8, src_p_y_stride: usize,
+    src_p_u: [*]const u8, src_p_u_stride: usize,
+    src_p_v: [*]const u8, src_p_v_stride: usize,
+    src_c_y: [*]const u8, src_c_y_stride: usize,
+    src_c_u: [*]const u8, src_c_u_stride: usize,
+    src_c_v: [*]const u8, src_c_v_stride: usize,
+    src_n_y: [*]const u8, src_n_y_stride: usize,
+    src_n_u: [*]const u8, src_n_u_stride: usize,
+    src_n_v: [*]const u8, src_n_v_stride: usize,
+) void {
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    std.debug.assert(motion4di.len == w * h);
+
+    const row_y: usize = w;
+    const row_uv: usize = w / 2;
+
+    var yy: i32 = 0;
+    while (yy < height) : (yy += 2) {
+        // m_iField == 0 in the Avisynth original (it's never set elsewhere),
+        // so `y = yy + 1` always.
+        const y = yy + 1;
+
+        const pT = plane.syp(src_c_y, src_c_y_stride, height, 0, y - 1);
+        const pC = plane.syp(src_c_y, src_c_y_stride, height, 0, y);
+        const pB = plane.syp(src_c_y, src_c_y_stride, height, 0, y + 1);
+        const pP = plane.syp(src_p_y, src_p_y_stride, height, 0, y);
+        const pN = plane.syp(src_n_y, src_n_y_stride, height, 0, y);
+        const pT_U = plane.syp(src_c_u, src_c_u_stride, height, 1, y - 1);
+        const pC_U = plane.syp(src_c_u, src_c_u_stride, height, 1, y);
+        const pB_U = plane.syp(src_c_u, src_c_u_stride, height, 1, y + 1);
+        const pP_U = plane.syp(src_p_u, src_p_u_stride, height, 1, y);
+        const pN_U = plane.syp(src_n_u, src_n_u_stride, height, 1, y);
+        const pT_V = plane.syp(src_c_v, src_c_v_stride, height, 2, y - 1);
+        const pC_V = plane.syp(src_c_v, src_c_v_stride, height, 2, y);
+        const pB_V = plane.syp(src_c_v, src_c_v_stride, height, 2, y + 1);
+        const pP_V = plane.syp(src_p_v, src_p_v_stride, height, 2, y);
+        const pN_V = plane.syp(src_n_v, src_n_v_stride, height, 2, y);
+
+        const mT_row: usize = @intCast(plane.clipY(y - 1, height));
+        const mB_row: usize = @intCast(plane.clipY(y + 1, height));
+        const pmMT = motion4di[mT_row * w ..][0..w];
+        const pmMB = motion4di[mB_row * w ..][0..w];
+
+        // Top field (y_top = yy = y^1) just gets copied straight through —
+        // upstream uses `memcpy(DYP(dst, y^1), SYP(srcC, y^1), width)`.
+        const pD_top = plane.dyp(dst_y, dst_y_stride, height, 0, y ^ 1);
+        const pSC_top = plane.syp(src_c_y, src_c_y_stride, height, 0, y ^ 1);
+        @memcpy(pD_top[0..row_y], pSC_top[0..row_y]);
+        if (@mod(y >> 1, 2) != 0) {
+            const pD_top_U = plane.dyp(dst_u, dst_u_stride, height, 1, y ^ 1);
+            const pSC_top_U = plane.syp(src_c_u, src_c_u_stride, height, 1, y ^ 1);
+            const pD_top_V = plane.dyp(dst_v, dst_v_stride, height, 2, y ^ 1);
+            const pSC_top_V = plane.syp(src_c_v, src_c_v_stride, height, 2, y ^ 1);
+            @memcpy(pD_top_U[0..row_uv], pSC_top_U[0..row_uv]);
+            @memcpy(pD_top_V[0..row_uv], pSC_top_V[0..row_uv]);
+        }
+
+        const pD = plane.dyp(dst_y, dst_y_stride, height, 0, y);
+        const pD_U = plane.dyp(dst_u, dst_u_stride, height, 1, y);
+        const pD_V = plane.dyp(dst_v, dst_v_stride, height, 2, y);
+
+        var x: usize = 0;
+        while (x < w) : (x += 1) {
+            const xh = x >> 1;
+
+            // luma IV scores
+            const ivc_l = ivKernel(pC[x], pT[x], pB[x]);
+            const ivp_l = ivKernel(pP[x], pT[x], pB[x]);
+            const ivn_l = ivKernel(pN[x], pT[x], pB[x]);
+            const ivcp_l = ivKernel(pavgb(pC[x], pP[x]), pT[x], pB[x]);
+            const ivcn_l = ivKernel(pavgb(pC[x], pN[x]), pT[x], pB[x]);
+
+            // chroma IV scores: max of U and V, broadcast to both
+            // luma pixels of the chroma sub-sample pair.
+            const ivc_u = ivKernel(pC_U[xh], pT_U[xh], pB_U[xh]);
+            const ivc_v = ivKernel(pC_V[xh], pT_V[xh], pB_V[xh]);
+            const ivc_uv = @max(ivc_u, ivc_v);
+            const ivp_u = ivKernel(pP_U[xh], pT_U[xh], pB_U[xh]);
+            const ivp_v = ivKernel(pP_V[xh], pT_V[xh], pB_V[xh]);
+            const ivp_uv = @max(ivp_u, ivp_v);
+            const ivn_u = ivKernel(pN_U[xh], pT_U[xh], pB_U[xh]);
+            const ivn_v = ivKernel(pN_V[xh], pT_V[xh], pB_V[xh]);
+            const ivn_uv = @max(ivn_u, ivn_v);
+            const ivcp_u = ivKernel(pavgb(pC_U[xh], pP_U[xh]), pT_U[xh], pB_U[xh]);
+            const ivcp_v = ivKernel(pavgb(pC_V[xh], pP_V[xh]), pT_V[xh], pB_V[xh]);
+            const ivcp_uv = @max(ivcp_u, ivcp_v);
+            const ivcn_u = ivKernel(pavgb(pC_U[xh], pN_U[xh]), pT_U[xh], pB_U[xh]);
+            const ivcn_v = ivKernel(pavgb(pC_V[xh], pN_V[xh]), pT_V[xh], pB_V[xh]);
+            const ivcn_uv = @max(ivcn_u, ivcn_v);
+
+            const ivc: u8 = @max(ivc_l, ivc_uv);
+            var ivp: u8 = @max(ivp_l, ivp_uv);
+            var ivn: u8 = @max(ivn_l, ivn_uv);
+            const ivcp: u8 = @max(ivcp_l, ivcp_uv);
+            const ivcn: u8 = @max(ivcn_l, ivcn_uv);
+
+            var pix_c: u8 = pC[x];
+            var pix_p: u8 = pP[x];
+            var pix_n: u8 = pN[x];
+            var pix_c_u: u8 = pC_U[xh];
+            var pix_n_u: u8 = pN_U[xh];
+            var pix_p_u: u8 = pP_U[xh];
+            var pix_c_v: u8 = pC_V[xh];
+            var pix_n_v: u8 = pN_V[xh];
+            var pix_p_v: u8 = pP_V[xh];
+            _ = &pix_c;
+            _ = &pix_c_u;
+            _ = &pix_c_v;
+
+            if (ivcp < ivp) {
+                pix_p = pavgb(pix_c, pix_p);
+                pix_p_u = pavgb(pix_c_u, pix_p_u);
+                pix_p_v = pavgb(pix_c_v, pix_p_v);
+                ivp = ivcp;
+            }
+            if (ivcn < ivn) {
+                pix_n = pavgb(pix_c, pix_n);
+                pix_n_u = pavgb(pix_c_u, pix_n_u);
+                pix_n_v = pavgb(pix_c_v, pix_n_v);
+                ivn = ivcn;
+            }
+
+            var iv: u8 = 0;
+            if (ivn < ivp) {
+                if (ivc < ivn) {
+                    pD[x] = pix_c;
+                    iv = ivc;
+                } else {
+                    pD[x] = pix_n;
+                    iv = ivn;
+                }
+            } else {
+                if (ivc < ivp) {
+                    pD[x] = pix_c;
+                    iv = ivc;
+                } else {
+                    pD[x] = pix_p;
+                    iv = ivp;
+                }
+            }
+
+            // Motion-gated vertical-average override.
+            const bDraw = iv > 8 and (pmMT[x] > 12 or pmMB[x] > 12);
+            if (bDraw) {
+                pD[x] = @intCast((@as(u16, pT[x]) + @as(u16, pB[x])) >> 1);
+            }
+
+            if (@mod(y >> 1, 2) != 0) {
+                // chroma: same pick using the same iv scores, then same
+                // motion-gated override (using pB_U/V instead of avg).
+                if (ivn < ivp) {
+                    if (ivc < ivn) {
+                        pD_U[xh] = pix_c_u;
+                        pD_V[xh] = pix_c_v;
+                    } else {
+                        pD_U[xh] = pix_n_u;
+                        pD_V[xh] = pix_n_v;
+                    }
+                } else {
+                    if (ivc < ivp) {
+                        pD_U[xh] = pix_c_u;
+                        pD_V[xh] = pix_c_v;
+                    } else {
+                        pD_U[xh] = pix_p_u;
+                        pD_V[xh] = pix_p_v;
+                    }
+                }
+                if (bDraw) {
+                    pD_U[xh] = pB_U[xh];
+                    pD_V[xh] = pB_V[xh];
+                }
+            }
+        }
+    }
+}
+
+/// `SimpleBlur_YV12` — diMode=2. Vertical (top+2*center+bottom)/4 blur
+/// applied only on pixels above a motion threshold, with a global "blur
+/// everything" override when motion is widespread.
+///
+/// Ported from `reference/avisynth/src/di.cpp::SimpleBlur_YV12`. The caller
+/// is responsible for having pre-populated `motion4di` via
+/// `makeSimpleBlurMap`.
+pub fn simpleBlur(
+    width: i32,
+    height: i32,
+    motion4di: []const u8,
+    dst_y: [*]u8, dst_y_stride: usize,
+    dst_u: [*]u8, dst_u_stride: usize,
+    dst_v: [*]u8, dst_v_stride: usize,
+    src_y: [*]const u8, src_y_stride: usize,
+    src_u: [*]const u8, src_u_stride: usize,
+    src_v: [*]const u8, src_v_stride: usize,
+    ref_y: [*]const u8, ref_y_stride: usize,
+    ref_u: [*]const u8, ref_u_stride: usize,
+    ref_v: [*]const u8, ref_v_stride: usize,
+) void {
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    std.debug.assert(motion4di.len == w * h);
+
+    // Pass 1: count motion-tagged pixels to decide if we should blur every
+    // pixel (when motion is widespread enough that selectivity hurts).
+    var motion_hits: usize = 0;
+    var y: i32 = 0;
+    while (y < height) : (y += 1) {
+        const row_off: usize = @intCast(plane.clipY(y, height));
+        const row = motion4di[row_off * w ..][0..w];
+        var x: usize = 0;
+        while (x < w) : (x += 1) {
+            if (row[x] > 4) motion_hits += 1;
+        }
+    }
+    const all_pixel = motion_hits > (w * h) >> 1;
+
+    // Pass 2: blur or copy per pixel.
+    y = 0;
+    while (y < height) : (y += 1) {
+        var pT: [*]const u8 = undefined;
+        var pC: [*]const u8 = undefined;
+        var pB: [*]const u8 = undefined;
+        var pT_U: [*]const u8 = undefined;
+        var pC_U: [*]const u8 = undefined;
+        var pB_U: [*]const u8 = undefined;
+        var pT_V: [*]const u8 = undefined;
+        var pC_V: [*]const u8 = undefined;
+        var pB_V: [*]const u8 = undefined;
+        if (@rem(y, 2) != 0) {
+            pT = plane.syp(src_y, src_y_stride, height, 0, y - 1);
+            pC = plane.syp(ref_y, ref_y_stride, height, 0, y);
+            pB = plane.syp(src_y, src_y_stride, height, 0, y + 1);
+            pT_U = plane.syp(src_u, src_u_stride, height, 1, y - 1);
+            pC_U = plane.syp(ref_u, ref_u_stride, height, 1, y);
+            pB_U = plane.syp(src_u, src_u_stride, height, 1, y + 1);
+            pT_V = plane.syp(src_v, src_v_stride, height, 2, y - 1);
+            pC_V = plane.syp(ref_v, ref_v_stride, height, 2, y);
+            pB_V = plane.syp(src_v, src_v_stride, height, 2, y + 1);
+        } else {
+            pT = plane.syp(ref_y, ref_y_stride, height, 0, y - 1);
+            pC = plane.syp(src_y, src_y_stride, height, 0, y);
+            pB = plane.syp(ref_y, ref_y_stride, height, 0, y + 1);
+            pT_U = plane.syp(ref_u, ref_u_stride, height, 1, y - 1);
+            pC_U = plane.syp(src_u, src_u_stride, height, 1, y);
+            pB_U = plane.syp(ref_u, ref_u_stride, height, 1, y + 1);
+            pT_V = plane.syp(ref_v, ref_v_stride, height, 2, y - 1);
+            pC_V = plane.syp(src_v, src_v_stride, height, 2, y);
+            pB_V = plane.syp(ref_v, ref_v_stride, height, 2, y + 1);
+        }
+        const m_row_off: usize = @intCast(plane.clipY(y, height));
+        const pmMC = motion4di[m_row_off * w ..][0..w];
+        const pD = plane.dyp(dst_y, dst_y_stride, height, 0, y);
+        const pD_U = plane.dyp(dst_u, dst_u_stride, height, 1, y);
+        const pD_V = plane.dyp(dst_v, dst_v_stride, height, 2, y);
+
+        var x: usize = 0;
+        while (x < w) : (x += 1) {
+            // Upstream's `pmMC[x-1]` and `pmMC[x+1]` overshoot the row at
+            // x=0 / x=w-1; we clamp those reads to 0 here.
+            const m_l: u8 = if (x > 0) pmMC[x - 1] else 0;
+            const m_c: u8 = pmMC[x];
+            const m_r: u8 = if (x + 1 < w) pmMC[x + 1] else 0;
+            const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
+            if (do_blur) {
+                pD[x] = @intCast((@as(u16, pT[x]) + @as(u16, pB[x]) + (@as(u16, pC[x]) << 1)) >> 2);
+                if (@mod(y >> 1, 2) != 0) {
+                    const xh = x >> 1;
+                    pD_U[xh] = @intCast((@as(u16, pT_U[xh]) + @as(u16, pB_U[xh]) + (@as(u16, pC_U[xh]) << 1)) >> 2);
+                    pD_V[xh] = @intCast((@as(u16, pT_V[xh]) + @as(u16, pB_V[xh]) + (@as(u16, pC_V[xh]) << 1)) >> 2);
+                }
+            } else {
+                pD[x] = pC[x];
+                if (@mod(y >> 1, 2) != 0) {
+                    const xh = x >> 1;
+                    pD_U[xh] = pC_U[xh];
+                    pD_V[xh] = pC_V[xh];
+                }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 test "copyCPNField: identical src and ref produce identical output" {
     const width: i32 = 32;

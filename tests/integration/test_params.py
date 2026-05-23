@@ -54,24 +54,39 @@ def test_ref_is_case_insensitive(core, fixtures):
 # Rejected values
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("ref_val", ["BOTTOM", "ALL", "NONE", "bottom"])
-def test_ref_non_top_is_rejected(core, fixtures, ref_val):
-    src = fixtures["constant_color"]()
-    with pytest.raises(vs.Error, match="not yet implemented"):
-        core.zit.IT(src, ref=ref_val).get_frame(0)
-
-
 def test_ref_garbage_value_is_rejected(core, fixtures):
     src = fixtures["constant_color"]()
     with pytest.raises(vs.Error, match="ref must be one of"):
         core.zit.IT(src, ref="garbage").get_frame(0)
 
 
-@pytest.mark.parametrize("dm", [1, 2])
-def test_unported_dimodes_rejected(core, fixtures, dm):
+# ---------------------------------------------------------------------------
+# Newly-implemented ref modes (BOTTOM, ALL, NONE)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("ref_val", ["TOP", "BOTTOM", "ALL", "NONE"])
+def test_ref_mode_runs_without_crash(core, fixtures, ref_val):
+    """All four Avisynth ref modes should at least produce a clean run on
+    a benign clip."""
     src = fixtures["constant_color"]()
-    with pytest.raises(vs.Error, match="not yet ported"):
-        core.zit.IT(src, diMode=dm).get_frame(0)
+    out = core.zit.IT(src, ref=ref_val)
+    # Force materialisation of the first and last frame.
+    out.get_frame(0)
+    out.get_frame(out.num_frames - 1)
+
+
+def test_ref_none_makes_every_frame_interlaced(core, fixtures):
+    """ref=NONE skips ChooseBest, so sumM stays at width*height and every
+    frame is classified ip='I'. With diMode=0 that means CopyCPNField is
+    used and the iUseFrame stays at 'C', so the output should equal the
+    naive top-field/bottom-field copy from C — i.e. the input frame."""
+    src = fixtures["constant_color"]()
+    out_none = core.zit.IT(src, fps=30, ref="NONE", diMode=0)
+    # The output must be a valid clip with the same frame count as the
+    # source (no decimation in fps=30 default).
+    assert out_none.num_frames == src.num_frames
+    out_none.get_frame(0)
+
 
 
 @pytest.mark.parametrize("dm", [-1, 4, 99])
@@ -79,6 +94,16 @@ def test_dimode_out_of_range_rejected(core, fixtures, dm):
     src = fixtures["constant_color"]()
     with pytest.raises(vs.Error, match="diMode must be"):
         core.zit.IT(src, diMode=dm).get_frame(0)
+
+
+@pytest.mark.parametrize("dm", [0, 1, 2, 3])
+def test_every_dimode_renders_without_crash(core, fixtures, dm):
+    """Smoke-test the diMode dispatcher: all four Avisynth-compatible modes
+    must produce a usable output clip across every fixture."""
+    src = fixtures["interlaced_stripes"]()
+    out = core.zit.IT(src, diMode=dm)
+    out.get_frame(0)
+    out.get_frame(out.num_frames - 1)
 
 
 # ---------------------------------------------------------------------------

@@ -18,8 +18,7 @@
 
 const std = @import("std");
 const plane = @import("plane.zig");
-
-const MAX_WIDTH = 8192;
+const MAX_WIDTH = plane.MAX_WIDTH;
 
 inline fn getF(x_in: f64) f64 {
     const x = @abs(x_in);

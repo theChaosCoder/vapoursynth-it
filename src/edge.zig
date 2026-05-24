@@ -12,18 +12,9 @@
 const std = @import("std");
 const plane = @import("plane.zig");
 const simd = @import("simd.zig");
+const scalar = @import("scalar.zig");
 
-const CHROMA_LANES = 16; // -> 32 luma lanes per SIMD iteration
-
-/// Absolute difference of two u8 values, returning u8.
-inline fn absDiffU8(a: u8, b: u8) u8 {
-    return if (a > b) a - b else b - a;
-}
-
-/// (b + c + 1) >> 1 in u16-precision intermediate, returning u8.
-inline fn avgRound(b: u8, c: u8) u8 {
-    return @intCast((@as(u16, b) + @as(u16, c) + 1) >> 1);
-}
+const CHROMA_LANES = plane.CHROMA_LANES; // -> 32 luma lanes per SIMD iteration
 
 /// |center - (top + bot + 1)/2|, equivalent to `make_de_map_asm` in vs_it_c.cpp.
 inline fn makeDeMapAsm(
@@ -35,8 +26,7 @@ inline fn makeDeMapAsm(
     offset: usize,
 ) u8 {
     const idx = i * step + offset;
-    const bc = avgRound(top[idx], bot[idx]);
-    return absDiffU8(center[idx], bc);
+    return scalar.absDiff(center[idx], scalar.pavgb(top[idx], bot[idx]));
 }
 
 /// `MakeDEmap_YV12` — produce an edge map into `edge_out` (size = width*height,

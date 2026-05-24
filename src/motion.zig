@@ -11,13 +11,10 @@
 const std = @import("std");
 const plane = @import("plane.zig");
 const simd = @import("simd.zig");
+const scalar = @import("scalar.zig");
 
-inline fn absDiffU8(a: u8, b: u8) u8 {
-    return if (a > b) a - b else b - a;
-}
-
-const MAX_WIDTH = 8192;
-const CHROMA_LANES = 16;
+const MAX_WIDTH = plane.MAX_WIDTH;
+const CHROMA_LANES = plane.CHROMA_LANES;
 
 /// Generic core for makeMotionMap2{Max,Min}. The two only differ in their
 /// final per-pixel combine (`@max` vs `@min`); everything else is identical.
@@ -76,18 +73,18 @@ inline fn makeMotionMap2Common(
             simd.store(CHROMA_LANES * 2, pD.ptr, i * 2, combined);
         }
         while (i < twidth) : (i += 1) {
-            const py_l = absDiffU8(pC[i * 2], pP[i * 2]);
-            const py_h = absDiffU8(pC[i * 2 + 1], pP[i * 2 + 1]);
-            const pu = absDiffU8(pC_U[i], pP_U[i]);
-            const pv = absDiffU8(pC_V[i], pP_V[i]);
+            const py_l = scalar.absDiff(pC[i * 2], pP[i * 2]);
+            const py_h = scalar.absDiff(pC[i * 2 + 1], pP[i * 2 + 1]);
+            const pu = scalar.absDiff(pC_U[i], pP_U[i]);
+            const pv = scalar.absDiff(pC_V[i], pP_V[i]);
             const puv = @max(pu, pv);
             const pl = @max(puv, py_l);
             const ph = @max(puv, py_h);
 
-            const ny_l = absDiffU8(pC[i * 2], pN[i * 2]);
-            const ny_h = absDiffU8(pC[i * 2 + 1], pN[i * 2 + 1]);
-            const nu = absDiffU8(pC_U[i], pN_U[i]);
-            const nv = absDiffU8(pC_V[i], pN_V[i]);
+            const ny_l = scalar.absDiff(pC[i * 2], pN[i * 2]);
+            const ny_h = scalar.absDiff(pC[i * 2 + 1], pN[i * 2 + 1]);
+            const nu = scalar.absDiff(pC_U[i], pN_U[i]);
+            const nv = scalar.absDiff(pC_V[i], pN_V[i]);
             const nuv = @max(nu, nv);
             const nl = @max(nuv, ny_l);
             const nh = @max(nuv, ny_h);
@@ -304,18 +301,17 @@ pub fn makeSimpleBlurMap(
     var y: i32 = 0;
     while (y < height) : (y += 1) {
         const pD = dst[@as(usize, @intCast(y)) * w ..][0..w];
-        var pT: [*]const u8 = undefined;
-        var pC: [*]const u8 = undefined;
-        var pB: [*]const u8 = undefined;
-        if (@rem(y, 2) != 0) {
-            pT = plane.syp(curr_y, curr_y_stride, height, 0, y - 1);
-            pC = plane.syp(ref_y, ref_y_stride, height, 0, y);
-            pB = plane.syp(curr_y, curr_y_stride, height, 0, y + 1);
-        } else {
-            pT = plane.syp(ref_y, ref_y_stride, height, 0, y - 1);
-            pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
-            pB = plane.syp(ref_y, ref_y_stride, height, 0, y + 1);
-        }
+        // Top/bottom rows come from one source, center from the other; swap
+        // based on the parity of `y` so the kernel always reads `T` and `B`
+        // from the same frame.
+        const odd = @rem(y, 2) != 0;
+        const tb_y = if (odd) curr_y else ref_y;
+        const tb_s = if (odd) curr_y_stride else ref_y_stride;
+        const ce_y = if (odd) ref_y else curr_y;
+        const ce_s = if (odd) ref_y_stride else curr_y_stride;
+        const pT = plane.syp(tb_y, tb_s, height, 0, y - 1);
+        const pC = plane.syp(ce_y, ce_s, height, 0, y);
+        const pB = plane.syp(tb_y, tb_s, height, 0, y + 1);
         const LANES = 32;
         var i: usize = 0;
         // SIMD body: 32 pixels per iteration via saturating u8 arithmetic.
@@ -336,9 +332,9 @@ pub fn makeSimpleBlurMap(
             const cval = pC[i];
             const t = pT[i];
             const b = pB[i];
-            const ct = absDiffU8(cval, t);
-            const cb = absDiffU8(cval, b);
-            const tb = absDiffU8(t, b);
+            const ct = scalar.absDiff(cval, t);
+            const cb = scalar.absDiff(cval, b);
+            const tb = scalar.absDiff(t, b);
             var delta: i32 = ct;
             delta = @min(255, delta + @as(i32, cb));
             delta = @max(0, delta - 2 * @as(i32, tb));

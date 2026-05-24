@@ -7,10 +7,7 @@
 const std = @import("std");
 const plane = @import("plane.zig");
 const simd = @import("simd.zig");
-
-inline fn absDiffI(a: u8, b: u8) i32 {
-    return if (a > b) @as(i32, a - b) else @as(i32, b - a);
-}
+const scalar = @import("scalar.zig");
 
 /// Upstream iterates `x < rowSize = vsapi->getStride(srcC, 0)`, i.e. it walks
 /// over the stride, not just the visible width. We preserve that behaviour
@@ -43,7 +40,7 @@ pub fn checkSceneChange(
             sum += @reduce(.Add, @as(@Vector(LANES, u16), ones));
         }
         while (x < stride_u) : (x += 1) {
-            if (absDiffI(pC[x], pP[x]) > 50) sum += 1;
+            if (scalar.absDiff(pC[x], pP[x]) > 50) sum += 1;
         }
     }
     const threshold: i64 = @divTrunc(@as(i64, height) * @as(i64, stride_i), 8);

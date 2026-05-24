@@ -10,14 +10,7 @@ const std = @import("std");
 const plane = @import("plane.zig");
 const edge_mod = @import("edge.zig");
 const simd = @import("simd.zig");
-
-inline fn absDiffU8(a: u8, b: u8) u8 {
-    return if (a > b) a - b else b - a;
-}
-
-inline fn avgRound(b: u8, c: u8) u8 {
-    return @intCast((@as(u16, b) + @as(u16, c) + 1) >> 1);
-}
+const scalar = @import("scalar.zig");
 
 /// min(|a-b|, |a-c|, |a - (b+c+1)/2|) — the inner "evaluate-interlace"
 /// kernel from upstream's `eval_iv_asm`.
@@ -25,15 +18,7 @@ inline fn evalIvAsm(eax: [*]const u8, ebx: [*]const u8, ecx: [*]const u8, i: usi
     const a = eax[i];
     const b = ebx[i];
     const c = ecx[i];
-    const ab = absDiffU8(a, b);
-    const ac = absDiffU8(a, c);
-    const a_bc = absDiffU8(a, avgRound(b, c));
-    return @min(@min(ab, ac), a_bc);
-}
-
-/// Saturated u8 subtract: `a > b ? a - b : 0`.
-inline fn subSat(a: u8, b: u8) u8 {
-    return if (a > b) a - b else 0;
+    return @min(@min(scalar.absDiff(a, b), scalar.absDiff(a, c)), scalar.absDiff(a, scalar.pavgb(b, c)));
 }
 
 /// SIMD eval-iv kernel for N lanes: min(|a-b|, |a-c|, |a - pavgb(b,c)|).
@@ -177,10 +162,10 @@ pub fn evalIv(
             const peh = @max(@max(peTh, peBh), peCh);
 
             // upstream subtracts pe twice (saturating each time).
-            mm0l = subSat(mm0l, pel);
-            mm0l = subSat(mm0l, pel);
-            mm0h = subSat(mm0h, peh);
-            mm0h = subSat(mm0h, peh);
+            mm0l = scalar.subSat(mm0l, pel);
+            mm0l = scalar.subSat(mm0l, pel);
+            mm0h = scalar.subSat(mm0h, peh);
+            mm0h = scalar.subSat(mm0h, peh);
 
             sum += @intFromBool(mm0l > th);
             sum += @intFromBool(mm0h > th);

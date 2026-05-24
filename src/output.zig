@@ -16,6 +16,7 @@
 const std = @import("std");
 const plane = @import("plane.zig");
 const simd = @import("simd.zig");
+const scalar = @import("scalar.zig");
 
 /// Copies one byte-row from src to dst using independent strides.
 inline fn bitblt(dst: [*]u8, src: [*]const u8, row_size: usize) void {
@@ -259,15 +260,11 @@ pub fn deintOneField(
 /// and matches the DEINTERLACE_ASM_1 / DEINTERLACE_ASM_2 macros from the
 /// Avisynth original.
 inline fn ivKernel(a: u8, b: u8, c: u8) u8 {
-    const ab = if (a > b) a - b else b - a;
-    const ac = if (a > c) a - c else c - a;
-    const bc: u8 = @intCast((@as(u16, b) + @as(u16, c) + 1) >> 1);
-    const a_bc = if (a > bc) a - bc else bc - a;
-    return @min(@min(ab, ac), a_bc);
+    return @min(@min(scalar.absDiff(a, b), scalar.absDiff(a, c)), scalar.absDiff(a, scalar.pavgb(b, c)));
 }
 
 /// SIMD version of `ivKernel`. Returns the per-lane minimum of |a-b|,
-/// |a-c| and |a - pavgb(b, c)| — the deinterlacer's interlace-evidence
+/// |a-c| and |a - scalar.pavgb(b, c)| — the deinterlacer's interlace-evidence
 /// metric, computed in parallel over `N` pixels.
 inline fn ivKernelVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c: @Vector(N, u8)) @Vector(N, u8) {
     const ab = simd.absDiff(N, a, b);
@@ -275,10 +272,6 @@ inline fn ivKernelVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c
     const bc = simd.pavgb(N, b, c);
     const a_bc = simd.absDiff(N, a, bc);
     return @min(@min(ab, ac), a_bc);
-}
-
-inline fn pavgb(a: u8, b: u8) u8 {
-    return @intCast((@as(u16, a) + @as(u16, b) + 1) >> 1);
 }
 
 /// Five plane-row pointers sharing a T/C/B/P/N geometry — the source rows
@@ -323,22 +316,22 @@ inline fn deinterlacePixelScalar(
     const ivc_l = ivKernel(y_rows.c[x], y_rows.t[x], y_rows.b[x]);
     const ivp_l = ivKernel(y_rows.p[x], y_rows.t[x], y_rows.b[x]);
     const ivn_l = ivKernel(y_rows.n[x], y_rows.t[x], y_rows.b[x]);
-    const ivcp_l = ivKernel(pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
-    const ivcn_l = ivKernel(pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
+    const ivcp_l = ivKernel(scalar.pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
+    const ivcn_l = ivKernel(scalar.pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
 
     // Chroma U IV scores.
     const ivc_u = ivKernel(u_rows.c[xh], u_rows.t[xh], u_rows.b[xh]);
     const ivp_u = ivKernel(u_rows.p[xh], u_rows.t[xh], u_rows.b[xh]);
     const ivn_u = ivKernel(u_rows.n[xh], u_rows.t[xh], u_rows.b[xh]);
-    const ivcp_u = ivKernel(pavgb(u_rows.c[xh], u_rows.p[xh]), u_rows.t[xh], u_rows.b[xh]);
-    const ivcn_u = ivKernel(pavgb(u_rows.c[xh], u_rows.n[xh]), u_rows.t[xh], u_rows.b[xh]);
+    const ivcp_u = ivKernel(scalar.pavgb(u_rows.c[xh], u_rows.p[xh]), u_rows.t[xh], u_rows.b[xh]);
+    const ivcn_u = ivKernel(scalar.pavgb(u_rows.c[xh], u_rows.n[xh]), u_rows.t[xh], u_rows.b[xh]);
 
     // Chroma V IV scores.
     const ivc_v = ivKernel(v_rows.c[xh], v_rows.t[xh], v_rows.b[xh]);
     const ivp_v = ivKernel(v_rows.p[xh], v_rows.t[xh], v_rows.b[xh]);
     const ivn_v = ivKernel(v_rows.n[xh], v_rows.t[xh], v_rows.b[xh]);
-    const ivcp_v = ivKernel(pavgb(v_rows.c[xh], v_rows.p[xh]), v_rows.t[xh], v_rows.b[xh]);
-    const ivcn_v = ivKernel(pavgb(v_rows.c[xh], v_rows.n[xh]), v_rows.t[xh], v_rows.b[xh]);
+    const ivcp_v = ivKernel(scalar.pavgb(v_rows.c[xh], v_rows.p[xh]), v_rows.t[xh], v_rows.b[xh]);
+    const ivcn_v = ivKernel(scalar.pavgb(v_rows.c[xh], v_rows.n[xh]), v_rows.t[xh], v_rows.b[xh]);
 
     // Combine: max(U, V) chroma, then max with luma → unified score per
     // candidate that drives both the luma and chroma pick.
@@ -360,15 +353,15 @@ inline fn deinterlacePixelScalar(
 
     // CP/CN substitution: when averaged with C gives a lower score, use it.
     if (ivcp < ivp) {
-        pix_p = pavgb(pix_c, pix_p);
-        pix_p_u = pavgb(pix_c_u, pix_p_u);
-        pix_p_v = pavgb(pix_c_v, pix_p_v);
+        pix_p = scalar.pavgb(pix_c, pix_p);
+        pix_p_u = scalar.pavgb(pix_c_u, pix_p_u);
+        pix_p_v = scalar.pavgb(pix_c_v, pix_p_v);
         ivp = ivcp;
     }
     if (ivcn < ivn) {
-        pix_n = pavgb(pix_c, pix_n);
-        pix_n_u = pavgb(pix_c_u, pix_n_u);
-        pix_n_v = pavgb(pix_c_v, pix_n_v);
+        pix_n = scalar.pavgb(pix_c, pix_n);
+        pix_n_u = scalar.pavgb(pix_c_u, pix_n_u);
+        pix_n_v = scalar.pavgb(pix_c_v, pix_n_v);
         ivn = ivcn;
     }
 
@@ -693,36 +686,20 @@ pub fn simpleBlur(
     // Pass 2: blur or copy per pixel.
     var y: i32 = 0;
     while (y < height) : (y += 1) {
-        var pT: [*]const u8 = undefined;
-        var pC: [*]const u8 = undefined;
-        var pB: [*]const u8 = undefined;
-        var pT_U: [*]const u8 = undefined;
-        var pC_U: [*]const u8 = undefined;
-        var pB_U: [*]const u8 = undefined;
-        var pT_V: [*]const u8 = undefined;
-        var pC_V: [*]const u8 = undefined;
-        var pB_V: [*]const u8 = undefined;
-        if (@rem(y, 2) != 0) {
-            pT = plane.syp(src.y, src.y_stride, height, 0, y - 1);
-            pC = plane.syp(ref.y, ref.y_stride, height, 0, y);
-            pB = plane.syp(src.y, src.y_stride, height, 0, y + 1);
-            pT_U = plane.syp(src.u, src.u_stride, height, 1, y - 1);
-            pC_U = plane.syp(ref.u, ref.u_stride, height, 1, y);
-            pB_U = plane.syp(src.u, src.u_stride, height, 1, y + 1);
-            pT_V = plane.syp(src.v, src.v_stride, height, 2, y - 1);
-            pC_V = plane.syp(ref.v, ref.v_stride, height, 2, y);
-            pB_V = plane.syp(src.v, src.v_stride, height, 2, y + 1);
-        } else {
-            pT = plane.syp(ref.y, ref.y_stride, height, 0, y - 1);
-            pC = plane.syp(src.y, src.y_stride, height, 0, y);
-            pB = plane.syp(ref.y, ref.y_stride, height, 0, y + 1);
-            pT_U = plane.syp(ref.u, ref.u_stride, height, 1, y - 1);
-            pC_U = plane.syp(src.u, src.u_stride, height, 1, y);
-            pB_U = plane.syp(ref.u, ref.u_stride, height, 1, y + 1);
-            pT_V = plane.syp(ref.v, ref.v_stride, height, 2, y - 1);
-            pC_V = plane.syp(src.v, src.v_stride, height, 2, y);
-            pB_V = plane.syp(ref.v, ref.v_stride, height, 2, y + 1);
-        }
+        // Top/bottom rows come from one frame, center from the other; swap
+        // based on `y` parity. The full PlaneViews carry all three planes
+        // so the pT/pC/pB triples below stay one expression each.
+        const tb = if (@rem(y, 2) != 0) src else ref;
+        const ce = if (@rem(y, 2) != 0) ref else src;
+        const pT = plane.syp(tb.y, tb.y_stride, height, 0, y - 1);
+        const pC = plane.syp(ce.y, ce.y_stride, height, 0, y);
+        const pB = plane.syp(tb.y, tb.y_stride, height, 0, y + 1);
+        const pT_U = plane.syp(tb.u, tb.u_stride, height, 1, y - 1);
+        const pC_U = plane.syp(ce.u, ce.u_stride, height, 1, y);
+        const pB_U = plane.syp(tb.u, tb.u_stride, height, 1, y + 1);
+        const pT_V = plane.syp(tb.v, tb.v_stride, height, 2, y - 1);
+        const pC_V = plane.syp(ce.v, ce.v_stride, height, 2, y);
+        const pB_V = plane.syp(tb.v, tb.v_stride, height, 2, y + 1);
         const m_row_off: usize = @intCast(plane.clipY(y, height));
         const pmMC = motion4di[m_row_off * w ..][0..w];
         const pD = plane.dyp(dst.y, dst.y_stride, height, 0, y);

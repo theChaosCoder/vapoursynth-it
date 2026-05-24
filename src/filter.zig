@@ -38,7 +38,7 @@ pub const Ref = enum { top, bottom, all, none };
 /// currently raise an error.
 pub const DiMode = enum(u8) { none = 0, deinterlace = 1, simple_blur = 2, one_field = 3 };
 
-const MAX_WIDTH = 8192;
+const MAX_WIDTH = plane.MAX_WIDTH;
 
 /// Plane access helpers shared with the algorithm modules — `FrameView` and
 /// `FrameViewMut` are local aliases for `plane.PlaneView` / `plane.PlaneViewMut`

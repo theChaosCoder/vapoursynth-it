@@ -9,6 +9,15 @@
 
 const std = @import("std");
 
+/// Upstream's hard-coded clip-width ceiling for the per-row scratch buffers
+/// in `motion.zig` and `blend.zig`. Anything wider is rejected in
+/// `filter.validateInput`. Kept here so a future bump only touches one site.
+pub const MAX_WIDTH = 8192;
+
+/// SIMD chroma lane width used by the YV12 kernels in `edge.zig` and
+/// `motion.zig`. Luma packs at 2× (32 lanes) since YV12 chroma is half-rate.
+pub const CHROMA_LANES = 16;
+
 /// Read-only view of one frame's Y/U/V plane base pointers + strides.
 /// Used by `filter.zig` to pass extracted plane geometry into the algorithm
 /// modules in one struct instead of six separate parameters per frame.

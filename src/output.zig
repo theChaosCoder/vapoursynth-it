@@ -281,6 +281,143 @@ inline fn pavgb(a: u8, b: u8) u8 {
     return @intCast((@as(u16, a) + @as(u16, b) + 1) >> 1);
 }
 
+/// Five plane-row pointers sharing a T/C/B/P/N geometry — the source rows
+/// the deinterlacer's per-pixel scalar kernel reads from. Built once per
+/// outer (y) iteration so the inner loop can pass them in one struct each
+/// for luma, U and V.
+const Iv5Rows = struct {
+    t: [*]const u8, // y - 1 (top, from current frame)
+    c: [*]const u8, // y     (center, from current frame)
+    b: [*]const u8, // y + 1 (bottom, from current frame)
+    p: [*]const u8, // y     (prev frame)
+    n: [*]const u8, // y     (next frame)
+};
+
+/// Per-pixel scalar deinterlacer kernel. Computes the 5 IV scores
+/// (C / P / N / avg(C,P) / avg(C,N)) for luma and chroma, picks the
+/// best-scoring candidate, then applies the motion-gated vertical-average
+/// override. Used by both the SIMD body's inner chroma loop and the
+/// scalar tail of `deinterlace`.
+///
+/// `write_luma` / `write_chroma` are comptime: the SIMD body's chroma
+/// loop calls with `write_luma=false` because luma is already written by
+/// the SIMD store; the scalar tail's chroma rows call with both `true`.
+/// Both branches share the IV scoring because the combined luma+chroma
+/// score drives both decisions — separating would re-cost the chroma IV.
+inline fn deinterlacePixelScalar(
+    comptime write_luma: bool,
+    comptime write_chroma: bool,
+    x: usize,
+    y_rows: Iv5Rows,
+    u_rows: Iv5Rows,
+    v_rows: Iv5Rows,
+    pmMT: []const u8,
+    pmMB: []const u8,
+    pD: [*]u8,
+    pD_U: [*]u8,
+    pD_V: [*]u8,
+) void {
+    const xh = x >> 1;
+
+    // Luma IV scores: C / P / N / avg(C,P) / avg(C,N) all against (T, B).
+    const ivc_l = ivKernel(y_rows.c[x], y_rows.t[x], y_rows.b[x]);
+    const ivp_l = ivKernel(y_rows.p[x], y_rows.t[x], y_rows.b[x]);
+    const ivn_l = ivKernel(y_rows.n[x], y_rows.t[x], y_rows.b[x]);
+    const ivcp_l = ivKernel(pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
+    const ivcn_l = ivKernel(pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
+
+    // Chroma U IV scores.
+    const ivc_u = ivKernel(u_rows.c[xh], u_rows.t[xh], u_rows.b[xh]);
+    const ivp_u = ivKernel(u_rows.p[xh], u_rows.t[xh], u_rows.b[xh]);
+    const ivn_u = ivKernel(u_rows.n[xh], u_rows.t[xh], u_rows.b[xh]);
+    const ivcp_u = ivKernel(pavgb(u_rows.c[xh], u_rows.p[xh]), u_rows.t[xh], u_rows.b[xh]);
+    const ivcn_u = ivKernel(pavgb(u_rows.c[xh], u_rows.n[xh]), u_rows.t[xh], u_rows.b[xh]);
+
+    // Chroma V IV scores.
+    const ivc_v = ivKernel(v_rows.c[xh], v_rows.t[xh], v_rows.b[xh]);
+    const ivp_v = ivKernel(v_rows.p[xh], v_rows.t[xh], v_rows.b[xh]);
+    const ivn_v = ivKernel(v_rows.n[xh], v_rows.t[xh], v_rows.b[xh]);
+    const ivcp_v = ivKernel(pavgb(v_rows.c[xh], v_rows.p[xh]), v_rows.t[xh], v_rows.b[xh]);
+    const ivcn_v = ivKernel(pavgb(v_rows.c[xh], v_rows.n[xh]), v_rows.t[xh], v_rows.b[xh]);
+
+    // Combine: max(U, V) chroma, then max with luma → unified score per
+    // candidate that drives both the luma and chroma pick.
+    const ivc: u8 = @max(ivc_l, @max(ivc_u, ivc_v));
+    var ivp: u8 = @max(ivp_l, @max(ivp_u, ivp_v));
+    var ivn: u8 = @max(ivn_l, @max(ivn_u, ivn_v));
+    const ivcp: u8 = @max(ivcp_l, @max(ivcp_u, ivcp_v));
+    const ivcn: u8 = @max(ivcn_l, @max(ivcn_u, ivcn_v));
+
+    const pix_c: u8 = y_rows.c[x];
+    var pix_p: u8 = y_rows.p[x];
+    var pix_n: u8 = y_rows.n[x];
+    const pix_c_u: u8 = u_rows.c[xh];
+    var pix_p_u: u8 = u_rows.p[xh];
+    var pix_n_u: u8 = u_rows.n[xh];
+    const pix_c_v: u8 = v_rows.c[xh];
+    var pix_p_v: u8 = v_rows.p[xh];
+    var pix_n_v: u8 = v_rows.n[xh];
+
+    // CP/CN substitution: when averaged with C gives a lower score, use it.
+    if (ivcp < ivp) {
+        pix_p = pavgb(pix_c, pix_p);
+        pix_p_u = pavgb(pix_c_u, pix_p_u);
+        pix_p_v = pavgb(pix_c_v, pix_p_v);
+        ivp = ivcp;
+    }
+    if (ivcn < ivn) {
+        pix_n = pavgb(pix_c, pix_n);
+        pix_n_u = pavgb(pix_c_u, pix_n_u);
+        pix_n_v = pavgb(pix_c_v, pix_n_v);
+        ivn = ivcn;
+    }
+
+    // Pick the lowest-iv candidate. Tie-breaks match upstream exactly.
+    var iv: u8 = 0;
+    var pick_y: u8 = undefined;
+    var pick_u: u8 = undefined;
+    var pick_v: u8 = undefined;
+    if (ivn < ivp) {
+        if (ivc < ivn) {
+            pick_y = pix_c;
+            pick_u = pix_c_u;
+            pick_v = pix_c_v;
+            iv = ivc;
+        } else {
+            pick_y = pix_n;
+            pick_u = pix_n_u;
+            pick_v = pix_n_v;
+            iv = ivn;
+        }
+    } else {
+        if (ivc < ivp) {
+            pick_y = pix_c;
+            pick_u = pix_c_u;
+            pick_v = pix_c_v;
+            iv = ivc;
+        } else {
+            pick_y = pix_p;
+            pick_u = pix_p_u;
+            pick_v = pix_p_v;
+            iv = ivp;
+        }
+    }
+
+    // Motion-gated override: at sufficiently high IV with high motion,
+    // fall back to the vertical luma average and `pB` for chroma.
+    const draw = iv > 8 and (pmMT[x] > 12 or pmMB[x] > 12);
+    if (write_luma) {
+        pD[x] = if (draw)
+            @intCast((@as(u16, y_rows.t[x]) + @as(u16, y_rows.b[x])) >> 1)
+        else
+            pick_y;
+    }
+    if (write_chroma) {
+        pD_U[xh] = if (draw) u_rows.b[xh] else pick_u;
+        pD_V[xh] = if (draw) v_rows.b[xh] else pick_v;
+    }
+}
+
 /// `Deinterlace_YV12` — diMode=1. The full Avisynth deinterlacer
 /// (`reference/avisynth/src/di.cpp:2194`). For each pixel of the bottom-field
 /// row, picks between C, P, N, avg(C,P) and avg(C,N) by minimum-IV score
@@ -357,6 +494,11 @@ pub fn deinterlace(
         const pD = plane.dyp(dst.y, dst.y_stride, height, 0, y);
         const pD_U = plane.dyp(dst.u, dst.u_stride, height, 1, y);
         const pD_V = plane.dyp(dst.v, dst.v_stride, height, 2, y);
+
+        const y_rows: Iv5Rows = .{ .t = pT, .c = pC, .b = pB, .p = pP, .n = pN };
+        const u_rows: Iv5Rows = .{ .t = pT_U, .c = pC_U, .b = pB_U, .p = pP_U, .n = pN_U };
+        const v_rows: Iv5Rows = .{ .t = pT_V, .c = pC_V, .b = pB_V, .p = pP_V, .n = pN_V };
+        const chroma_row = @mod(y >> 1, 2) != 0;
 
         // SIMD body for luma: process LL pixels per iter. Chroma is kept
         // scalar (run in the same x-loop) because the upstream "last write
@@ -463,190 +605,29 @@ pub fn deinterlace(
             const result = @select(u8, draw_mask, vavg, result_no_motion);
             simd.store(LL, pD, xx, result);
 
-            // Chroma writes: scalar to preserve "last write of luma pair
-            // wins" semantics. Skipped entirely when row parity says no.
-            if (@mod(y >> 1, 2) != 0) {
+            // Chroma writes: scalar to preserve upstream's "last write of
+            // pair wins" semantics — adjacent xc values share the same xch
+            // index and the second naturally overwrites the first.
+            if (chroma_row) {
                 var xc = xx;
                 while (xc < xx + LL) : (xc += 1) {
-                    const xch = xc >> 1;
-                    const ic_l = ivKernel(pC[xc], pT[xc], pB[xc]);
-                    const ip_l = ivKernel(pP[xc], pT[xc], pB[xc]);
-                    const in_l = ivKernel(pN[xc], pT[xc], pB[xc]);
-                    const icp_l = ivKernel(pavgb(pC[xc], pP[xc]), pT[xc], pB[xc]);
-                    const icn_l = ivKernel(pavgb(pC[xc], pN[xc]), pT[xc], pB[xc]);
-                    const ic_u = ivKernel(pC_U[xch], pT_U[xch], pB_U[xch]);
-                    const ic_v = ivKernel(pC_V[xch], pT_V[xch], pB_V[xch]);
-                    const ic_uv = @max(ic_u, ic_v);
-                    const ip_u = ivKernel(pP_U[xch], pT_U[xch], pB_U[xch]);
-                    const ip_v = ivKernel(pP_V[xch], pT_V[xch], pB_V[xch]);
-                    const ip_uv = @max(ip_u, ip_v);
-                    const in_u = ivKernel(pN_U[xch], pT_U[xch], pB_U[xch]);
-                    const in_v = ivKernel(pN_V[xch], pT_V[xch], pB_V[xch]);
-                    const in_uv = @max(in_u, in_v);
-                    const icp_u = ivKernel(pavgb(pC_U[xch], pP_U[xch]), pT_U[xch], pB_U[xch]);
-                    const icp_v = ivKernel(pavgb(pC_V[xch], pP_V[xch]), pT_V[xch], pB_V[xch]);
-                    const icp_uv = @max(icp_u, icp_v);
-                    const icn_u = ivKernel(pavgb(pC_U[xch], pN_U[xch]), pT_U[xch], pB_U[xch]);
-                    const icn_v = ivKernel(pavgb(pC_V[xch], pN_V[xch]), pT_V[xch], pB_V[xch]);
-                    const icn_uv = @max(icn_u, icn_v);
-                    const ic_s: u8 = @max(ic_l, ic_uv);
-                    var ip_s: u8 = @max(ip_l, ip_uv);
-                    var in_s: u8 = @max(in_l, in_uv);
-                    const icp_s: u8 = @max(icp_l, icp_uv);
-                    const icn_s: u8 = @max(icn_l, icn_uv);
-                    const pc_u: u8 = pC_U[xch];
-                    var pn_u: u8 = pN_U[xch];
-                    var pp_u: u8 = pP_U[xch];
-                    const pc_v: u8 = pC_V[xch];
-                    var pn_v: u8 = pN_V[xch];
-                    var pp_v: u8 = pP_V[xch];
-                    if (icp_s < ip_s) {
-                        pp_u = pavgb(pc_u, pp_u);
-                        pp_v = pavgb(pc_v, pp_v);
-                        ip_s = icp_s;
-                    }
-                    if (icn_s < in_s) {
-                        pn_u = pavgb(pc_u, pn_u);
-                        pn_v = pavgb(pc_v, pn_v);
-                        in_s = icn_s;
-                    }
-                    var iv_s: u8 = 0;
-                    if (in_s < ip_s) {
-                        if (ic_s < in_s) {
-                            pD_U[xch] = pc_u;
-                            pD_V[xch] = pc_v;
-                            iv_s = ic_s;
-                        } else {
-                            pD_U[xch] = pn_u;
-                            pD_V[xch] = pn_v;
-                            iv_s = in_s;
-                        }
-                    } else {
-                        if (ic_s < ip_s) {
-                            pD_U[xch] = pc_u;
-                            pD_V[xch] = pc_v;
-                            iv_s = ic_s;
-                        } else {
-                            pD_U[xch] = pp_u;
-                            pD_V[xch] = pp_v;
-                            iv_s = ip_s;
-                        }
-                    }
-                    if (iv_s > 8 and (pmMT[xc] > 12 or pmMB[xc] > 12)) {
-                        pD_U[xch] = pB_U[xch];
-                        pD_V[xch] = pB_V[xch];
-                    }
+                    deinterlacePixelScalar(false, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
                 }
             }
         }
 
-        var x: usize = xx;
-        while (x < w) : (x += 1) {
-            const xh = x >> 1;
-
-            // luma IV scores
-            const ivc_l = ivKernel(pC[x], pT[x], pB[x]);
-            const ivp_l = ivKernel(pP[x], pT[x], pB[x]);
-            const ivn_l = ivKernel(pN[x], pT[x], pB[x]);
-            const ivcp_l = ivKernel(pavgb(pC[x], pP[x]), pT[x], pB[x]);
-            const ivcn_l = ivKernel(pavgb(pC[x], pN[x]), pT[x], pB[x]);
-
-            // chroma IV scores: max of U and V, broadcast to both
-            // luma pixels of the chroma sub-sample pair.
-            const ivc_u = ivKernel(pC_U[xh], pT_U[xh], pB_U[xh]);
-            const ivc_v = ivKernel(pC_V[xh], pT_V[xh], pB_V[xh]);
-            const ivc_uv = @max(ivc_u, ivc_v);
-            const ivp_u = ivKernel(pP_U[xh], pT_U[xh], pB_U[xh]);
-            const ivp_v = ivKernel(pP_V[xh], pT_V[xh], pB_V[xh]);
-            const ivp_uv = @max(ivp_u, ivp_v);
-            const ivn_u = ivKernel(pN_U[xh], pT_U[xh], pB_U[xh]);
-            const ivn_v = ivKernel(pN_V[xh], pT_V[xh], pB_V[xh]);
-            const ivn_uv = @max(ivn_u, ivn_v);
-            const ivcp_u = ivKernel(pavgb(pC_U[xh], pP_U[xh]), pT_U[xh], pB_U[xh]);
-            const ivcp_v = ivKernel(pavgb(pC_V[xh], pP_V[xh]), pT_V[xh], pB_V[xh]);
-            const ivcp_uv = @max(ivcp_u, ivcp_v);
-            const ivcn_u = ivKernel(pavgb(pC_U[xh], pN_U[xh]), pT_U[xh], pB_U[xh]);
-            const ivcn_v = ivKernel(pavgb(pC_V[xh], pN_V[xh]), pT_V[xh], pB_V[xh]);
-            const ivcn_uv = @max(ivcn_u, ivcn_v);
-
-            const ivc: u8 = @max(ivc_l, ivc_uv);
-            var ivp: u8 = @max(ivp_l, ivp_uv);
-            var ivn: u8 = @max(ivn_l, ivn_uv);
-            const ivcp: u8 = @max(ivcp_l, ivcp_uv);
-            const ivcn: u8 = @max(ivcn_l, ivcn_uv);
-
-            const pix_c: u8 = pC[x];
-            var pix_p: u8 = pP[x];
-            var pix_n: u8 = pN[x];
-            const pix_c_u: u8 = pC_U[xh];
-            var pix_n_u: u8 = pN_U[xh];
-            var pix_p_u: u8 = pP_U[xh];
-            const pix_c_v: u8 = pC_V[xh];
-            var pix_n_v: u8 = pN_V[xh];
-            var pix_p_v: u8 = pP_V[xh];
-
-            if (ivcp < ivp) {
-                pix_p = pavgb(pix_c, pix_p);
-                pix_p_u = pavgb(pix_c_u, pix_p_u);
-                pix_p_v = pavgb(pix_c_v, pix_p_v);
-                ivp = ivcp;
+        // Scalar tail. Pick the per-row chroma mode via comptime branching
+        // so the helper specialises into two tight no-chroma / with-chroma
+        // bodies — comparable to the original separate-paths layout.
+        if (chroma_row) {
+            var x: usize = xx;
+            while (x < w) : (x += 1) {
+                deinterlacePixelScalar(true, true, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
             }
-            if (ivcn < ivn) {
-                pix_n = pavgb(pix_c, pix_n);
-                pix_n_u = pavgb(pix_c_u, pix_n_u);
-                pix_n_v = pavgb(pix_c_v, pix_n_v);
-                ivn = ivcn;
-            }
-
-            var iv: u8 = 0;
-            if (ivn < ivp) {
-                if (ivc < ivn) {
-                    pD[x] = pix_c;
-                    iv = ivc;
-                } else {
-                    pD[x] = pix_n;
-                    iv = ivn;
-                }
-            } else {
-                if (ivc < ivp) {
-                    pD[x] = pix_c;
-                    iv = ivc;
-                } else {
-                    pD[x] = pix_p;
-                    iv = ivp;
-                }
-            }
-
-            // Motion-gated vertical-average override.
-            const bDraw = iv > 8 and (pmMT[x] > 12 or pmMB[x] > 12);
-            if (bDraw) {
-                pD[x] = @intCast((@as(u16, pT[x]) + @as(u16, pB[x])) >> 1);
-            }
-
-            if (@mod(y >> 1, 2) != 0) {
-                // chroma: same pick using the same iv scores, then same
-                // motion-gated override (using pB_U/V instead of avg).
-                if (ivn < ivp) {
-                    if (ivc < ivn) {
-                        pD_U[xh] = pix_c_u;
-                        pD_V[xh] = pix_c_v;
-                    } else {
-                        pD_U[xh] = pix_n_u;
-                        pD_V[xh] = pix_n_v;
-                    }
-                } else {
-                    if (ivc < ivp) {
-                        pD_U[xh] = pix_c_u;
-                        pD_V[xh] = pix_c_v;
-                    } else {
-                        pD_U[xh] = pix_p_u;
-                        pD_V[xh] = pix_p_v;
-                    }
-                }
-                if (bDraw) {
-                    pD_U[xh] = pB_U[xh];
-                    pD_V[xh] = pB_V[xh];
-                }
+        } else {
+            var x: usize = xx;
+            while (x < w) : (x += 1) {
+                deinterlacePixelScalar(true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
             }
         }
     }

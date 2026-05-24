@@ -51,10 +51,9 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.tag }}
 
-      - name: Install Zig ${{ env.ZIG_VERSION }}
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

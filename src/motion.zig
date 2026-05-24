@@ -24,9 +24,9 @@ inline fn makeMotionMap2Common(
     height: i32,
     even_rows_only: bool,
     dst: []u8,
-    prev: plane.PlaneView,
-    curr: plane.PlaneView,
-    next: plane.PlaneView,
+    prev: *const plane.PlaneView,
+    curr: *const plane.PlaneView,
+    next: *const plane.PlaneView,
 ) void {
     const w: usize = @intCast(width);
     const twidth: usize = @intCast(@divTrunc(width, 2));
@@ -260,9 +260,9 @@ pub fn makeMotionMap2Min(
     width: i32,
     height: i32,
     dst: []u8,
-    prev: plane.PlaneView,
-    curr: plane.PlaneView,
-    next: plane.PlaneView,
+    prev: *const plane.PlaneView,
+    curr: *const plane.PlaneView,
+    next: *const plane.PlaneView,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
     makeMotionMap2Common(false, width, height, true, dst, prev, curr, next);
@@ -275,9 +275,9 @@ pub fn makeMotionMap2Max(
     width: i32,
     height: i32,
     dst: []u8,
-    prev: plane.PlaneView,
-    curr: plane.PlaneView,
-    next: plane.PlaneView,
+    prev: *const plane.PlaneView,
+    curr: *const plane.PlaneView,
+    next: *const plane.PlaneView,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
     makeMotionMap2Common(true, width, height, false, dst, prev, curr, next);
@@ -400,7 +400,7 @@ test "makeMotionMap2Max: identical frames yield zero map" {
     @memset(dst, 0xFF);
 
     const v: plane.PlaneView = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
-    makeMotionMap2Max(width, height, dst, v, v, v);
+    makeMotionMap2Max(width, height, dst, &v, &v, &v);
 
     for (dst) |x| try std.testing.expectEqual(@as(u8, 0), x);
 }

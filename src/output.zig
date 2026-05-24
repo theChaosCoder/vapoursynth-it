@@ -36,9 +36,9 @@ inline fn chromaWidth(width: i32) i32 {
 pub fn copyCPNField(
     width: i32,
     height: i32,
-    dst: plane.PlaneViewMut,
-    src: plane.PlaneView,
-    ref: plane.PlaneView,
+    dst: *const plane.PlaneViewMut,
+    src: *const plane.PlaneView,
+    ref: *const plane.PlaneView,
 ) void {
     const row_y: usize = @intCast(width);
     const row_uv: usize = @intCast(chromaWidth(width));
@@ -75,8 +75,8 @@ pub fn deintOneField(
     simple_blur: []const u8,
     motion2max: []const u8,
     field_map_scratch: []u8,
-    dst: plane.PlaneViewMut,
-    src: plane.PlaneView,
+    dst: *const plane.PlaneViewMut,
+    src: *const plane.PlaneView,
     ref_y: [*]const u8,
     ref_y_stride: usize,
 ) void {
@@ -431,10 +431,10 @@ pub fn deinterlace(
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst: plane.PlaneViewMut,
-    src_p: plane.PlaneView,
-    src_c: plane.PlaneView,
-    src_n: plane.PlaneView,
+    dst: *const plane.PlaneViewMut,
+    src_p: *const plane.PlaneView,
+    src_c: *const plane.PlaneView,
+    src_n: *const plane.PlaneView,
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -650,9 +650,9 @@ pub fn simpleBlur(
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst: plane.PlaneViewMut,
-    src: plane.PlaneView,
-    ref: plane.PlaneView,
+    dst: *const plane.PlaneViewMut,
+    src: *const plane.PlaneView,
+    ref: *const plane.PlaneView,
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -836,7 +836,7 @@ test "copyCPNField: identical src and ref produce identical output" {
 
     const dst: plane.PlaneViewMut = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
     const view: plane.PlaneView = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
-    copyCPNField(width, height, dst, view, view);
+    copyCPNField(width, height, &dst, &view, &view);
 
     // Y plane must equal src
     try std.testing.expectEqualSlices(u8, yp, dy);
@@ -873,7 +873,7 @@ test "copyCPNField: bottom row uses ref, top row uses src" {
     const dst: plane.PlaneViewMut = .{ .y = dy.ptr, .y_stride = w, .u = duv.ptr, .u_stride = w / 2, .v = duv.ptr, .v_stride = w / 2 };
     const src: plane.PlaneView = .{ .y = sy.ptr, .y_stride = w, .u = uvb.ptr, .u_stride = w / 2, .v = uvb.ptr, .v_stride = w / 2 };
     const ref: plane.PlaneView = .{ .y = ry.ptr, .y_stride = w, .u = uvr.ptr, .u_stride = w / 2, .v = uvr.ptr, .v_stride = w / 2 };
-    copyCPNField(width, height, dst, src, ref);
+    copyCPNField(width, height, &dst, &src, &ref);
 
     // Even rows (top fields) come from src (0xAA)
     try std.testing.expectEqual(@as(u8, 0xAA), dy[0 * w + 0]);

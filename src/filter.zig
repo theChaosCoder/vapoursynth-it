@@ -40,24 +40,12 @@ pub const DiMode = enum(u8) { none = 0, deinterlace = 1, simple_blur = 2, one_fi
 
 const MAX_WIDTH = 8192;
 
-/// Frame view: three plane pointers + strides extracted from a VSFrame.
-const FrameView = struct {
-    y: [*]const u8,
-    y_stride: usize,
-    u: [*]const u8,
-    u_stride: usize,
-    v: [*]const u8,
-    v_stride: usize,
-};
-
-const FrameViewMut = struct {
-    y: [*]u8,
-    y_stride: usize,
-    u: [*]u8,
-    u_stride: usize,
-    v: [*]u8,
-    v_stride: usize,
-};
+/// Plane access helpers shared with the algorithm modules — `FrameView` and
+/// `FrameViewMut` are local aliases for `plane.PlaneView` / `plane.PlaneViewMut`
+/// so that `viewOf(...)`/`viewOfMut(...)` return the same struct the algorithm
+/// modules accept without any conversion.
+const FrameView = plane.PlaneView;
+const FrameViewMut = plane.PlaneViewMut;
 
 fn viewOf(zapi: *const ZAPI, frame: *const vs.Frame) FrameView {
     return .{
@@ -748,10 +736,10 @@ fn deinterlaceInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) voi
     const vC = viewOf(zapi, srcC.?);
     const vN = viewOf(zapi, srcN.?);
 
-    motion_mod.makeMotionMap2Min(inst.width, inst.height, inst.call_state.motionMap4DI, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+    motion_mod.makeMotionMap2Min(inst.width, inst.height, inst.call_state.motionMap4DI, vP, vC, vN);
 
     const vD = viewOfMut(zapi, dst);
-    output_mod.deinterlace(inst.width, inst.height, inst.call_state.motionMap4DI, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+    output_mod.deinterlace(inst.width, inst.height, inst.call_state.motionMap4DI, vD, vP, vC, vN);
 }
 
 /// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds
@@ -780,7 +768,7 @@ fn simpleBlurInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void
     motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     const vD = viewOfMut(zapi, dst);
-    output_mod.simpleBlur(inst.width, inst.height, inst.call_state.motionMap4DI, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
+    output_mod.simpleBlur(inst.width, inst.height, inst.call_state.motionMap4DI, vD, vC, vR);
 }
 
 fn copyCpnInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
@@ -803,7 +791,7 @@ fn copyCpnInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     const vD = viewOfMut(zapi, dst);
-    output_mod.copyCPNField(inst.width, inst.height, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
+    output_mod.copyCPNField(inst.width, inst.height, vD, vC, vR);
 }
 
 fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
@@ -841,14 +829,14 @@ fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     defer zapi.freeFrame(srcN);
     const vP = viewOf(zapi, srcP.?);
     const vN = viewOf(zapi, srcN.?);
-    motion_mod.makeMotionMap2Max(inst.width, inst.height, inst.call_state.motionMap4DIMax, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+    motion_mod.makeMotionMap2Max(inst.width, inst.height, inst.call_state.motionMap4DIMax, vP, vC, vN);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
     // during output). Reuse it to avoid an extra allocation, matching the
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
     const vD = viewOfMut(zapi, dst);
-    output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, ref_y, ref_y_stride);
+    output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, vD, vC, ref_y, ref_y_stride);
 }
 
 fn drawPrevFrame(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {

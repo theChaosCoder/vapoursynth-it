@@ -9,6 +9,28 @@
 
 const std = @import("std");
 
+/// Read-only view of one frame's Y/U/V plane base pointers + strides.
+/// Used by `filter.zig` to pass extracted plane geometry into the algorithm
+/// modules in one struct instead of six separate parameters per frame.
+pub const PlaneView = struct {
+    y: [*]const u8,
+    y_stride: usize,
+    u: [*]const u8,
+    u_stride: usize,
+    v: [*]const u8,
+    v_stride: usize,
+};
+
+/// Writable counterpart to `PlaneView` for destination frames.
+pub const PlaneViewMut = struct {
+    y: [*]u8,
+    y_stride: usize,
+    u: [*]u8,
+    u_stride: usize,
+    v: [*]u8,
+    v_stride: usize,
+};
+
 /// Adjusts a parameter relative to a 720x480 (NTSC) reference resolution.
 ///
 /// Used by upstream to scale thresholds for clips of different sizes. The

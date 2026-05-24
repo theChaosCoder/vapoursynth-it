@@ -27,24 +27,9 @@ inline fn makeMotionMap2Common(
     height: i32,
     even_rows_only: bool,
     dst: []u8,
-    prev_y: [*]const u8,
-    prev_y_stride: usize,
-    prev_u: [*]const u8,
-    prev_u_stride: usize,
-    prev_v: [*]const u8,
-    prev_v_stride: usize,
-    curr_y: [*]const u8,
-    curr_y_stride: usize,
-    curr_u: [*]const u8,
-    curr_u_stride: usize,
-    curr_v: [*]const u8,
-    curr_v_stride: usize,
-    next_y: [*]const u8,
-    next_y_stride: usize,
-    next_u: [*]const u8,
-    next_u_stride: usize,
-    next_v: [*]const u8,
-    next_v_stride: usize,
+    prev: plane.PlaneView,
+    curr: plane.PlaneView,
+    next: plane.PlaneView,
 ) void {
     const w: usize = @intCast(width);
     const twidth: usize = @intCast(@divTrunc(width, 2));
@@ -53,15 +38,15 @@ inline fn makeMotionMap2Common(
     var y: i32 = 0;
     while (y < height) : (y += y_step) {
         const pD = dst[@as(usize, @intCast(y)) * w ..][0..w];
-        const pC = plane.syp(curr_y, curr_y_stride, height, 0, y);
-        const pP = plane.syp(prev_y, prev_y_stride, height, 0, y);
-        const pN = plane.syp(next_y, next_y_stride, height, 0, y);
-        const pC_U = plane.syp(curr_u, curr_u_stride, height, 1, y);
-        const pP_U = plane.syp(prev_u, prev_u_stride, height, 1, y);
-        const pN_U = plane.syp(next_u, next_u_stride, height, 1, y);
-        const pC_V = plane.syp(curr_v, curr_v_stride, height, 2, y);
-        const pP_V = plane.syp(prev_v, prev_v_stride, height, 2, y);
-        const pN_V = plane.syp(next_v, next_v_stride, height, 2, y);
+        const pC = plane.syp(curr.y, curr.y_stride, height, 0, y);
+        const pP = plane.syp(prev.y, prev.y_stride, height, 0, y);
+        const pN = plane.syp(next.y, next.y_stride, height, 0, y);
+        const pC_U = plane.syp(curr.u, curr.u_stride, height, 1, y);
+        const pP_U = plane.syp(prev.u, prev.u_stride, height, 1, y);
+        const pN_U = plane.syp(next.u, next.u_stride, height, 1, y);
+        const pC_V = plane.syp(curr.v, curr.v_stride, height, 2, y);
+        const pP_V = plane.syp(prev.v, prev.v_stride, height, 2, y);
+        const pN_V = plane.syp(next.v, next.v_stride, height, 2, y);
 
         var i: usize = 0;
         while (i + CHROMA_LANES <= twidth) : (i += CHROMA_LANES) {
@@ -278,27 +263,12 @@ pub fn makeMotionMap2Min(
     width: i32,
     height: i32,
     dst: []u8,
-    prev_y: [*]const u8,
-    prev_y_stride: usize,
-    prev_u: [*]const u8,
-    prev_u_stride: usize,
-    prev_v: [*]const u8,
-    prev_v_stride: usize,
-    curr_y: [*]const u8,
-    curr_y_stride: usize,
-    curr_u: [*]const u8,
-    curr_u_stride: usize,
-    curr_v: [*]const u8,
-    curr_v_stride: usize,
-    next_y: [*]const u8,
-    next_y_stride: usize,
-    next_u: [*]const u8,
-    next_u_stride: usize,
-    next_v: [*]const u8,
-    next_v_stride: usize,
+    prev: plane.PlaneView,
+    curr: plane.PlaneView,
+    next: plane.PlaneView,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    makeMotionMap2Common(false, width, height, true, dst, prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride, curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride, next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
+    makeMotionMap2Common(false, width, height, true, dst, prev, curr, next);
 }
 
 /// MakeMotionMap2Max_YV12 — max per-pixel motion between (prev, curr) and
@@ -308,27 +278,12 @@ pub fn makeMotionMap2Max(
     width: i32,
     height: i32,
     dst: []u8,
-    prev_y: [*]const u8,
-    prev_y_stride: usize,
-    prev_u: [*]const u8,
-    prev_u_stride: usize,
-    prev_v: [*]const u8,
-    prev_v_stride: usize,
-    curr_y: [*]const u8,
-    curr_y_stride: usize,
-    curr_u: [*]const u8,
-    curr_u_stride: usize,
-    curr_v: [*]const u8,
-    curr_v_stride: usize,
-    next_y: [*]const u8,
-    next_y_stride: usize,
-    next_u: [*]const u8,
-    next_u_stride: usize,
-    next_v: [*]const u8,
-    next_v_stride: usize,
+    prev: plane.PlaneView,
+    curr: plane.PlaneView,
+    next: plane.PlaneView,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    makeMotionMap2Common(true, width, height, false, dst, prev_y, prev_y_stride, prev_u, prev_u_stride, prev_v, prev_v_stride, curr_y, curr_y_stride, curr_u, curr_u_stride, curr_v, curr_v_stride, next_y, next_y_stride, next_u, next_u_stride, next_v, next_v_stride);
+    makeMotionMap2Common(true, width, height, false, dst, prev, curr, next);
 }
 
 /// MakeSimpleBlurMap_YV12 — computes a "did the line need to be interpolated"
@@ -448,7 +403,8 @@ test "makeMotionMap2Max: identical frames yield zero map" {
     @memset(vp, 100);
     @memset(dst, 0xFF);
 
-    makeMotionMap2Max(width, height, dst, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const v: plane.PlaneView = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
+    makeMotionMap2Max(width, height, dst, v, v, v);
 
     for (dst) |x| try std.testing.expectEqual(@as(u8, 0), x);
 }

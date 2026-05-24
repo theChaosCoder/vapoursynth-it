@@ -14,47 +14,25 @@ on:
 permissions:
   contents: read
 
-# Centralise the Zig version. The ziglang.org download URL pattern
-# is `https://ziglang.org/download/{ZIG_VERSION}/zig-{arch}-{os}-{ZIG_VERSION}.tar.xz`
-# (note the new ordering: <arch>-<os>, not <os>-<arch>, since 0.15.0).
 env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
-  lint:
-    name: zig fmt
+  build:
+    name: fmt + test + cross
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install Zig ${{ env.ZIG_VERSION }}
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - run: zig version
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
       - name: Check formatting
         run: zig fmt --check src build.zig build.zig.zon
 
-  unit:
-    name: zig build test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Zig ${{ env.ZIG_VERSION }}
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: Run unit tests
         run: zig build test --summary all
 
-  cross:
-    name: Cross-compile (all targets)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Zig ${{ env.ZIG_VERSION }}
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: Build all five platform binaries
         # The `cross` step in build.zig deposits each artefact under a
         # predictable `zig-out/<name>/` subdirectory; that's more reliable
@@ -62,8 +40,10 @@ jobs:
         # `zig-out/bin/` rather than `lib/`, for instance, which trips up
         # a naive matrix upload).
         run: zig build cross
+
       - name: List built artefacts
         run: find zig-out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | sort
+
       - uses: actions/upload-artifact@v5
         with:
           name: libzit-linux-x86_64
@@ -90,65 +70,35 @@ jobs:
           path: zig-out/windows-x86_64/zit.dll
           if-no-files-found: error
 
-  # Integration tests need a working VapourSynth install. The default
-  # ubuntu-latest image does not have VapourSynth in apt, and the PyPI
-  # wheel ships only the Python binding, not the C library. Until we
-  # add a PPA / Docker image / source build, this job is best-effort.
-  #
-  # `continue-on-error: true` means a failure here doesn't block the
-  # overall CI result — push/PR still goes green on lint+unit+cross.
+  # The VapourSynth PyPI wheel bundles both libvapoursynth.so and the
+  # vspipe binary on Linux, so a plain `pip install` is enough — no PPA
+  # dance or system VapourSynth required. The upstream-reference build
+  # is still best-effort because it needs system headers we don't have.
   integration:
-    name: Integration tests (best effort)
+    name: Integration tests
     runs-on: ubuntu-latest
-    needs: [unit]
+    needs: [build]
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Zig ${{ env.ZIG_VERSION }}
-        run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" | tar -xJ
-          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Try to install VapourSynth from PPA
-        id: vsinstall
-        continue-on-error: true
-        run: |
-          sudo add-apt-repository -y ppa:djcj/vapoursynth
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            vapoursynth \
-            python3-vapoursynth \
-            libvapoursynth-dev \
-            clang \
-            pkg-config
-
-      - name: Skip the rest if VapourSynth install failed
-        if: steps.vsinstall.outcome != 'success'
-        run: |
-          echo "VapourSynth not available — skipping integration tests."
-          echo "To enable in CI: add a working VapourSynth install (PPA, source build, or a Docker image)."
-          exit 0
-
-      - name: Install pytest + numpy
-        if: steps.vsinstall.outcome == 'success'
-        run: pip install pytest numpy
+      - name: Install VapourSynth + test deps
+        run: pip install VapourSynth pytest numpy
 
       - name: Build the Zig plugin
-        if: steps.vsinstall.outcome == 'success'
         run: zig build --release=fast
 
       - name: Build the upstream API-4 reference plugin (best effort)
-        if: steps.vsinstall.outcome == 'success'
         continue-on-error: true
         run: scripts/build_upstream_api4.sh
 
       - name: Run pytest
-        if: steps.vsinstall.outcome == 'success'
         env:
           PYTHONPATH: scripts
         run: |

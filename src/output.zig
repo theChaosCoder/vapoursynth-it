@@ -305,7 +305,6 @@ inline fn ivKernelVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c
     return @min(@min(ab, ac), a_bc);
 }
 
-
 inline fn pavgb(a: u8, b: u8) u8 {
     return @intCast((@as(u16, a) + @as(u16, b) + 1) >> 1);
 }

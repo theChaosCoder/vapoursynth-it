@@ -595,7 +595,20 @@ pub fn deinterlace(
             const result_no_motion = @select(u8, c_wins, v_c, pix_np);
             const final_iv = @select(u8, c_wins, ivc_v, iv_np);
 
-            // Motion-gated vertical-average override
+            // Motion-gated vertical-average override.
+            //
+            // TODO: `vavg` here uses `pavgb` (= (t+b+1) >> 1, rounded). The
+            // scalar tail (via deinterlacePixelScalar) and the Avisynth C
+            // upstream both use `(t+b) >> 1` (truncated). Result: at pixels
+            // where the motion-override fires and (pT[x]+pB[x]) is odd, our
+            // SIMD path differs by ±1 from the scalar/upstream path. Only
+            // affects diMode=1 (DEINTERLACE); the vapoursynth-cpp-api4
+            // reference plugin hardcodes one_field, so we can't validate
+            // diMode=1 against ground truth yet. Fix is one-liner once we
+            // have an oracle (Avisynth IT.dll build or hand-computed
+            // fixtures): replace `simd.pavgb(LL, v_t, v_b)` with
+            // `@intCast((@as(@Vector(LL, u16), v_t) + @as(@Vector(LL, u16),
+            // v_b)) >> @splat(1))`.
             const mt_v = simd.load(LL, pmMT.ptr, xx);
             const mb_v = simd.load(LL, pmMB.ptr, xx);
             const motion_high: @Vector(LL, bool) = (mt_v > motion_th) | (mb_v > motion_th);

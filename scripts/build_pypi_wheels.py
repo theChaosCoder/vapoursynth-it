@@ -48,7 +48,7 @@ DIST = ROOT / "dist"
 
 PROJECT_NAME = "vapoursynth-zit"
 DIST_NAME = "vapoursynth_zit"   # PEP 503-normalised + underscore for filenames
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 # (Zig target dir, binary filename, wheel platform tag).
 #

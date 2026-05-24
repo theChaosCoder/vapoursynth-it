@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
+## [1.3.3] — 2026-05-24
+
+Packaging-only release. Same Binaries.
+
+### Fixed
+
+- PyPI wheel should install into site-packages/vapoursynth/plugins/
+
 ## [1.3.2] — 2026-05-24
 
 Patch release. Pixel output unchanged from 1.3.1 on every supported

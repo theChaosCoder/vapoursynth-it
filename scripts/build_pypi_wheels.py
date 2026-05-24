@@ -138,7 +138,7 @@ def build_wheel(zig_dir: str, binname: str, plat_tag: str) -> Path:
     wheel = _wheel_file(plat_tag).encode("utf-8")
 
     distinfo = f"{DIST_NAME}-{VERSION}.dist-info"
-    plugin_path = f"{DIST_NAME}-{VERSION}.data/data/vapoursynth/plugins/{binname}"
+    plugin_path = f"vapoursynth/plugins/{binname}"
 
     entries = [
         (plugin_path, bin_data),

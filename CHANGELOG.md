@@ -4,6 +4,97 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
+## [1.3.2] — 2026-05-24
+
+Patch release. Pixel output unchanged from 1.3.1 on every supported
+parameter combination — verified bit-identical against the
+`vapoursynth-cpp-api4` reference across the full upstream-compare grid
+(8 fixtures × parameter combos) and across the 3-mode smoke
+(default / ref=ALL / blend=1, 150 frames each, sha256 prefix
+`63e6227182560887` unchanged).
+
+### Performance
+
+The hot algorithm functions (`motion.makeMotionMap2{Min,Max}`,
+`output.{copyCPNField, deinterlace, simpleBlur, deintOneField}`) now
+take their plane-view arguments as `*const plane.PlaneView` instead of
+by value. Each PlaneView is 48 bytes; the 24fps path threads several
+through several calls per output frame, so the reduction in stack
+copies shows up clearly:
+
+| Pipeline           | 1.3.1    | 1.3.2    | Δ       |
+| ------------------ | -------: | -------: | ------: |
+| fps=24 (default)   | 2395 fps | 2701 fps | +12.8%  |
+| fps=24 + blend     | 2391 fps | 2699 fps | +12.9%  |
+| fps=24 ref=ALL     | 2490 fps | 2795 fps | +12.3%  |
+| fps=30 diMode=1    |  716 fps |  715 fps | —       |
+| fps=30 diMode=2    | 3409 fps | 3447 fps | +1.1%   |
+
+(720x480 NTSC, 10 000 measured frames per run × 3 runs, `taskset -c 1`,
+ReleaseFast.) The 30fps modes don't move because they do one
+`makeOutput` per output frame; the 24fps path runs `getFrameSub` 5×
+per output frame in the decimation block, which is where the saved
+copies add up.
+
+### Internal restructuring (no behaviour change)
+
+- **Bindings**: dropped the hand-rolled `@cImport` layer in `src/c.zig`
+  and the three vendored VS4 headers in favour of the upstream
+  [`vapoursynth-zig`](https://github.com/dnjulek/vapoursynth-zig)
+  package. Filter + plugin entry now use `ZAPI` / `ZMap` helpers with
+  type-safe enums and typed prop setters (`setFieldBased`,
+  `setCombed`, `setDuration*`). Net diff ~−1450 lines.
+- **`PlaneView` / `PlaneViewMut`** introduced in `plane.zig` — one
+  canonical 6-field struct replaces the 18–28 separate
+  `[*]const u8` + `usize` parameters the algorithm functions used to
+  take.
+- **`scalar.zig`** module for tiny u8-math helpers (`absDiff`,
+  `pavgb`, `subSat`) that were previously redefined per-file (6
+  inline copies across 5 files). Vector versions stay in `simd.zig`.
+- **Deinterlace dedupe**: extracted
+  `output.deinterlacePixelScalar` — one canonical inline kernel for
+  the per-pixel scoring + pick + motion-override that was previously
+  written twice in `output.deinterlace` (~75 lines inside the SIMD
+  body's chroma loop + ~109 lines in the scalar tail).
+- **Audit cleanup**: dead fields (`CFrameInfo.{out, matchAcc}`,
+  `CallState.{realFrame, iUsePrev, iUseNext}`) removed; redundant
+  per-frame `@memset` calls in `CallState.resetForFrame` dropped
+  (consumers either fully overwrite or pair partial writes with
+  matching partial reads); 12 `var ... = undefined` plane-row locals
+  in `simpleBlur` paths became `const` expressions.
+- **Centralised constants**: `MAX_WIDTH` (3 copies) and
+  `CHROMA_LANES` (2 copies) consolidated into `plane.zig`.
+
+### Tooling
+
+- **`scripts/bench.py`** — wall-clock fps benchmark across the
+  relevant filter configurations. Used to validate the
+  `PlaneView`-by-pointer change above; sub-1% spread on SIMD-bound
+  paths once pinned with `taskset -c 1`.
+- **CI workflow** (`.github/workflows/ci.yml`) — consolidated three
+  duplicated `curl | tar` Zig installs into `mlugg/setup-zig@v2`;
+  collapsed the lint/unit/cross jobs into a single `build` job;
+  replaced the PPA-based VapourSynth install on the integration job
+  with `pip install VapourSynth` (the PyPI wheel ships
+  `libvapoursynth.so` + `vspipe` on Linux). −50 lines.
+- **Release workflow** (`.github/workflows/release.yml`) — same
+  `mlugg/setup-zig@v2` swap; tag-resolve collapsed to a one-liner via
+  `inputs.tag || github.ref_name`; the
+  `gh release view || create; upload --clobber; edit` choreography
+  became a single `softprops/action-gh-release@v2` step. −20+ lines.
+
+### Known issue (carried forward, not new)
+
+The SIMD body of `output.deinterlace` (diMode=1) uses `pavgb` (rounded
+average) for the motion-override luma override, while the scalar tail
+and the Avisynth C upstream both use truncated `(t+b)>>1`. At pixels
+where the motion-override fires and `(pT[x]+pB[x])` is odd, our SIMD
+path differs by ±1 from the scalar path. The `vapoursynth-cpp-api4`
+reference plugin hardcodes `one_field` (no `diMode` parameter), so
+this can't yet be validated against ground truth — a TODO marker in
+the source records the one-liner fix for whoever builds the Avisynth
+oracle (or hand-computes reference fixtures).
+
 ## [1.3.1] — 2026-05-23
 
 Patch release. Performance-only — pixel output unchanged from 1.3.0

@@ -13,7 +13,7 @@ const filter = @import("filter.zig");
 const PLUGIN_ID = "com.thechaoscoder.zit";
 const PLUGIN_NAMESPACE = "zit";
 const PLUGIN_NAME = "VapourSynth IVTC Filter (Zig port)";
-const PLUGIN_VERSION = std.SemanticVersion{ .major = 1, .minor = 3, .patch = 1 };
+const PLUGIN_VERSION = std.SemanticVersion{ .major = 1, .minor = 3, .patch = 2 };
 
 export fn VapourSynthPluginInit2(plugin: *vs.Plugin, vspapi: *const vs.PLUGINAPI) void {
     ZAPI.Plugin.config(PLUGIN_ID, PLUGIN_NAMESPACE, PLUGIN_NAME, PLUGIN_VERSION, plugin, vspapi);

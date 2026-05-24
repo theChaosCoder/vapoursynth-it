@@ -9,12 +9,13 @@ const std = @import("std");
 
 /// Per-input-frame state. Allocated `numFrames + 6` times (the +6 is a
 /// guard so out-of-range index probes near the clip end don't trash neighbours).
+///
+/// Upstream's CFrameInfo also carries `matchAcc` and `out` bytes; both are
+/// only ever written to their sentinel and never read, so we drop them here.
 pub const CFrameInfo = extern struct {
     pos: u8,
     match: u8,
-    matchAcc: u8,
     ip: u8,
-    out: u8,
     mflag: u8,
 
     diffP0: i32,
@@ -33,9 +34,7 @@ pub const CFrameInfo = extern struct {
     pub const init: CFrameInfo = .{
         .pos = 'U',
         .match = 'U',
-        .matchAcc = 'U',
         .ip = 'U',
-        .out = 'U',
         .mflag = 'U',
         .diffP0 = -1,
         .diffP1 = -1,
@@ -71,13 +70,16 @@ pub const CTFblockInfo = extern struct {
 /// instance (sound under fmParallelRequests where calls are serialised) or
 /// stack-allocated per-call later if we ever switch to fmParallel.
 pub const CallState = struct {
-    /// scratch buffers, lifetime = one GetFrame call
+    /// scratch buffers, lifetime = one GetFrame call. The buffers are not
+    /// zeroed here — every consumer either writes all bytes it later reads
+    /// (makeSimpleBlurMap / makeMotionMap2Max) or pairs its partial-row
+    /// writes with reads that match (makeMotionMap2Min writes even rows,
+    /// the deinterlacer only reads even rows). The edge map is zeroed
+    /// just-in-time inside chooseBest before makeDeMap fills it.
     edgeMap: []u8,
     motionMap4DI: []u8,
     motionMap4DIMax: []u8,
 
-    /// current output frame the filter is producing (post-decimation index)
-    realFrame: i32 = 0,
     /// current input frame the algorithm is reasoning about (pre-decimation)
     currentFrame: i32 = 0,
 
@@ -91,15 +93,12 @@ pub const CallState = struct {
     iSumPM: i64 = 0,
 
     bRefP: bool = true,
-    iUsePrev: i32 = 0,
-    iUseNext: i32 = 0,
 
     /// 'C', 'P', 'N' (uppercase = strong match, lowercase = weak) — picked by
     /// chooseBest and consumed by the output stage.
     iUseFrame: u8 = 'C',
 
     pub fn resetForFrame(self: *CallState, n: i32) void {
-        self.realFrame = n;
         self.currentFrame = n;
         self.iSumC = 0;
         self.iSumP = 0;
@@ -110,12 +109,7 @@ pub const CallState = struct {
         self.iSumPN = 0;
         self.iSumPM = 0;
         self.bRefP = true;
-        self.iUsePrev = 0;
-        self.iUseNext = 0;
         self.iUseFrame = 'C';
-        @memset(self.edgeMap, 0);
-        @memset(self.motionMap4DI, 0);
-        @memset(self.motionMap4DIMax, 0);
     }
 };
 

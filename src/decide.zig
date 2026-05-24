@@ -60,6 +60,10 @@ pub fn compCp(
     const ns0 = frame_info[np1].diffS0;
     const ns1 = frame_info[np1].diffS1;
 
+    // Upstream uses two threshold names (`th` for "small diff", `thm` for
+    // "motion") but both are AdjPara(5). Preserved verbatim — renaming to a
+    // single constant would diverge from the C reference and break the
+    // bit-for-bit oracle comparison.
     const th = plane.adjPara(5, width, height);
     const thm = plane.adjPara(5, width, height);
     const ths = plane.adjPara(200, width, height);
@@ -164,6 +168,7 @@ pub fn compCn(
     const ns0 = frame_info[np1].diffS0;
     const ns1 = frame_info[np1].diffS1;
 
+    // Same `th == thm == AdjPara(5)` pair as compCp — see note there.
     const th = plane.adjPara(5, width, height);
     const thm = plane.adjPara(5, width, height);
     const ths = plane.adjPara(200, width, height);
@@ -199,6 +204,10 @@ pub fn compCn(
                 return true;
             }
             if (mpe and spo) {
+                // Upstream quirk: every other branch in this block writes
+                // lowercase ('c'/'n', the "weak match" marker), but this one
+                // sets uppercase 'N'. Avisynth di.cpp line 2990 has the same
+                // asymmetry. Preserved verbatim.
                 cs.iUseFrame = 'N';
                 return true;
             }

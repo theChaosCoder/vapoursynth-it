@@ -114,7 +114,10 @@ pub fn blendFrames(
 
         var z: usize = 0;
         while (z < srcs.len) : (z += 1) {
-            const wt: u16 = @intCast(@as(u32, @bitCast(kernel.weights[z])) & 0xFF);
+            // Weights sum to ~256 with size=3 in practice, so each fits in u16.
+            // @intCast traps in debug if buildKernel ever produces a negative
+            // or oversized value — better than silently `& 0xFF`-truncating.
+            const wt: u16 = @intCast(kernel.weights[z]);
             const pS = plane.syp(srcs[z].y, srcs[z].y_stride, height, 0, y);
             const pS_U = plane.syp(srcs[z].u, srcs[z].u_stride, height, 1, y);
             const pS_V = plane.syp(srcs[z].v, srcs[z].v_stride, height, 2, y);
@@ -184,7 +187,7 @@ test "blendFrames: identical sources -> output equals source" {
     @memset(dv, 0);
 
     const k = buildKernel(0);
-    const sv: blk.SourceView = .{
+    const sv: SourceView = .{
         .y = yp.ptr,
         .y_stride = w,
         .u = up.ptr,
@@ -192,8 +195,8 @@ test "blendFrames: identical sources -> output equals source" {
         .v = vp.ptr,
         .v_stride = w / 2,
     };
-    var sources = [_]blk.SourceView{ sv, sv, sv };
-    blk.blendFrames(width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
+    var sources = [_]SourceView{ sv, sv, sv };
+    blendFrames(width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
 
     // With identical sources whose weights sum to ~256, the output should be
     // ~equal to the source (rounding may differ by 1 LSB).
@@ -201,5 +204,3 @@ test "blendFrames: identical sources -> output equals source" {
     for (du) |v| try std.testing.expect(@abs(@as(i32, v) - 80) <= 1);
     for (dv) |v| try std.testing.expect(@abs(@as(i32, v) - 200) <= 1);
 }
-
-const blk = @This();

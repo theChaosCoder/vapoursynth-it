@@ -870,7 +870,7 @@ fn drawPrevFrame(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool 
         defer zapi.freeFrame(srcC);
         const vP = viewOf(zapi, srcP.?);
         const vC = viewOf(zapi, srcC.?);
-        result = scene_mod.checkSceneChange(inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
+        result = scene_mod.checkSceneChange(inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     }
     if (result) {
         inst.call_state.iUseFrame = inst.frame_info[@intCast(n_prev)].match;

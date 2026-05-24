@@ -12,18 +12,17 @@ inline fn absDiffI(a: u8, b: u8) i32 {
     return if (a > b) @as(i32, a - b) else @as(i32, b - a);
 }
 
+/// Upstream iterates `x < rowSize = vsapi->getStride(srcC, 0)`, i.e. it walks
+/// over the stride, not just the visible width. We preserve that behaviour
+/// bit-for-bit by using `curr_stride` as the inner-loop bound — `width` is
+/// therefore not a parameter (upstream's `iWidth` is ignored too).
 pub fn checkSceneChange(
-    width: i32,
     height: i32,
     prev_y: [*]const u8,
     prev_stride: usize,
     curr_y: [*]const u8,
     curr_stride: usize,
 ) bool {
-    _ = width;
-    // Upstream iterates `x < rowSize = vsapi->getStride(srcC, 0)` here, i.e.
-    // it walks over the stride, not just the visible width. We preserve that
-    // behaviour bit-for-bit by using `curr_stride` as the inner-loop bound.
     const stride_u: usize = curr_stride;
     const stride_i: i32 = @intCast(curr_stride);
     var sum: i64 = 0;
@@ -60,7 +59,7 @@ test "checkSceneChange: identical frames -> no scene change" {
     const a = try std.testing.allocator.alloc(u8, w * h);
     defer std.testing.allocator.free(a);
     @memset(a, 128);
-    try std.testing.expectEqual(false, checkSceneChange(width, height, a.ptr, w, a.ptr, w));
+    try std.testing.expectEqual(false, checkSceneChange(height, a.ptr, w, a.ptr, w));
 }
 
 test "checkSceneChange: completely different frames -> scene change" {
@@ -74,5 +73,5 @@ test "checkSceneChange: completely different frames -> scene change" {
     defer std.testing.allocator.free(b);
     @memset(a, 0);
     @memset(b, 255);
-    try std.testing.expectEqual(true, checkSceneChange(width, height, a.ptr, w, b.ptr, w));
+    try std.testing.expectEqual(true, checkSceneChange(height, a.ptr, w, b.ptr, w));
 }

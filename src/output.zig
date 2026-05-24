@@ -16,7 +16,6 @@
 const std = @import("std");
 const plane = @import("plane.zig");
 const simd = @import("simd.zig");
-const motion = @import("motion.zig");
 
 /// Copies one byte-row from src to dst using independent strides.
 inline fn bitblt(dst: [*]u8, src: [*]const u8, row_size: usize) void {
@@ -278,8 +277,6 @@ pub fn deintOneField(
             }
         }
     }
-    // Silence unused warnings
-    _ = motion;
 }
 
 /// Compact reimplementation of upstream's `eval_iv_asm` for one pixel.
@@ -542,14 +539,12 @@ pub fn deinterlace(
                     var in_s: u8 = @max(in_l, in_uv);
                     const icp_s: u8 = @max(icp_l, icp_uv);
                     const icn_s: u8 = @max(icn_l, icn_uv);
-                    var pc_u: u8 = pC_U[xch];
+                    const pc_u: u8 = pC_U[xch];
                     var pn_u: u8 = pN_U[xch];
                     var pp_u: u8 = pP_U[xch];
-                    var pc_v: u8 = pC_V[xch];
+                    const pc_v: u8 = pC_V[xch];
                     var pn_v: u8 = pN_V[xch];
                     var pp_v: u8 = pP_V[xch];
-                    _ = &pc_u;
-                    _ = &pc_v;
                     if (icp_s < ip_s) {
                         pp_u = pavgb(pc_u, pp_u);
                         pp_v = pavgb(pc_v, pp_v);
@@ -625,18 +620,15 @@ pub fn deinterlace(
             const ivcp: u8 = @max(ivcp_l, ivcp_uv);
             const ivcn: u8 = @max(ivcn_l, ivcn_uv);
 
-            var pix_c: u8 = pC[x];
+            const pix_c: u8 = pC[x];
             var pix_p: u8 = pP[x];
             var pix_n: u8 = pN[x];
-            var pix_c_u: u8 = pC_U[xh];
+            const pix_c_u: u8 = pC_U[xh];
             var pix_n_u: u8 = pN_U[xh];
             var pix_p_u: u8 = pP_U[xh];
-            var pix_c_v: u8 = pC_V[xh];
+            const pix_c_v: u8 = pC_V[xh];
             var pix_n_v: u8 = pN_V[xh];
             var pix_p_v: u8 = pP_V[xh];
-            _ = &pix_c;
-            _ = &pix_c_u;
-            _ = &pix_c_v;
 
             if (ivcp < ivp) {
                 pix_p = pavgb(pix_c, pix_p);

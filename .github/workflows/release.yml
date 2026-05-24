@@ -37,14 +37,9 @@ jobs:
     steps:
       - name: Resolve target tag
         id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Releasing tag: $tag"
+        # `inputs.tag` is set by workflow_dispatch; `github.ref_name` for
+        # tag-push events gives the tag without the `refs/tags/` prefix.
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout at tag
         uses: actions/checkout@v5
@@ -110,26 +105,13 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG='${{ steps.tag.outputs.tag }}'
-
-          # Idempotent: if the release for this tag already exists, replace
-          # the assets in place; otherwise create the release fresh.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists — refreshing assets and notes"
-            for old in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
-              gh release delete-asset "$TAG" "$old" --yes
-            done
-            gh release upload "$TAG" dist-zips/*.zip
-            gh release edit "$TAG" --notes-file CHANGELOG.md
-          else
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes-file CHANGELOG.md \
-              dist-zips/*.zip
-          fi
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: CHANGELOG.md
+          files: dist-zips/*.zip
+          fail_on_unmatched_files: true
 
   publish-pypi:
     name: Publish wheels to PyPI
@@ -152,9 +134,6 @@ jobs:
         with:
           name: pypi-wheels
           path: dist/
-
-      - name: List wheels
-        run: ls -la dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -7,13 +7,24 @@ pub fn build(b: *std.Build) void {
         .preferred_optimize_mode = .ReleaseFast,
     });
 
+    const vapoursynth_dep = b.dependency("vapoursynth", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const vapoursynth_mod = vapoursynth_dep.module("vapoursynth");
+
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/plugin.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        // VS dispatches getFrame from its thread pool, but each filter
+        // instance is internally single-threaded (no std.Thread / atomics
+        // / Mutex), so we let the compiler elide TLS/atomic codegen.
+        .single_threaded = true,
+        .strip = optimize == .ReleaseFast,
     });
-    lib_mod.addIncludePath(b.path("vendor/vapoursynth"));
+    lib_mod.addImport("vapoursynth", vapoursynth_mod);
 
     const lib = b.addLibrary(.{
         .name = "zit",
@@ -37,13 +48,19 @@ pub fn build(b: *std.Build) void {
     else
         target;
 
+    const test_vapoursynth_dep = b.dependency("vapoursynth", .{
+        .target = test_target,
+        .optimize = optimize,
+    });
+
     const tests_mod = b.createModule(.{
         .root_source_file = b.path("src/plugin.zig"),
         .target = test_target,
         .optimize = optimize,
         .link_libc = true,
+        .single_threaded = true,
     });
-    tests_mod.addIncludePath(b.path("vendor/vapoursynth"));
+    tests_mod.addImport("vapoursynth", test_vapoursynth_dep.module("vapoursynth"));
 
     const unit_tests = b.addTest(.{ .root_module = tests_mod });
     const run_unit_tests = b.addRunArtifact(unit_tests);
@@ -68,13 +85,19 @@ pub fn build(b: *std.Build) void {
         const cross_target = b.resolveTargetQuery(
             std.Target.Query.parse(.{ .arch_os_abi = t.triple }) catch unreachable,
         );
+        const cross_vs_dep = b.dependency("vapoursynth", .{
+            .target = cross_target,
+            .optimize = .ReleaseFast,
+        });
         const cross_mod = b.createModule(.{
             .root_source_file = b.path("src/plugin.zig"),
             .target = cross_target,
             .optimize = .ReleaseFast,
             .link_libc = true,
+            .single_threaded = true,
+            .strip = true,
         });
-        cross_mod.addIncludePath(b.path("vendor/vapoursynth"));
+        cross_mod.addImport("vapoursynth", cross_vs_dep.module("vapoursynth"));
 
         const cross_lib = b.addLibrary(.{
             .name = "zit",

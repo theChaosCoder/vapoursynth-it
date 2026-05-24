@@ -5,28 +5,19 @@
 //! in `filter.zig` and the algorithm primitives in their own sibling files.
 
 const std = @import("std");
-const c = @import("c.zig");
+const vapoursynth = @import("vapoursynth");
+const vs = vapoursynth.vapoursynth4;
+const ZAPI = vapoursynth.ZAPI;
 const filter = @import("filter.zig");
 
 const PLUGIN_ID = "com.thechaoscoder.zit";
 const PLUGIN_NAMESPACE = "zit";
 const PLUGIN_NAME = "VapourSynth IVTC Filter (Zig port)";
-const PLUGIN_VERSION = c.VS_MAKE_VERSION(1, 3);
+const PLUGIN_VERSION = std.SemanticVersion{ .major = 1, .minor = 3, .patch = 1 };
 
-export fn VapourSynthPluginInit2(
-    plugin: *c.VSPlugin,
-    vspapi: *const c.VSPLUGINAPI,
-) callconv(.c) void {
-    _ = vspapi.configPlugin.?(
-        PLUGIN_ID,
-        PLUGIN_NAMESPACE,
-        PLUGIN_NAME,
-        PLUGIN_VERSION,
-        c.VAPOURSYNTH_API_VERSION,
-        0,
-        plugin,
-    );
-    _ = vspapi.registerFunction.?(
+export fn VapourSynthPluginInit2(plugin: *vs.Plugin, vspapi: *const vs.PLUGINAPI) void {
+    ZAPI.Plugin.config(PLUGIN_ID, PLUGIN_NAMESPACE, PLUGIN_NAME, PLUGIN_VERSION, plugin, vspapi);
+    ZAPI.Plugin.function(
         "IT",
         "clip:vnode;" ++
             "fps:int:opt;" ++
@@ -37,8 +28,8 @@ export fn VapourSynthPluginInit2(
             "diMode:int:opt;", // 0=NONE, 1=DEINTERLACE, 2=SIMPLE_BLUR, 3=ONE_FIELD (default)
         "clip:vnode;",
         filter.create,
-        null,
         plugin,
+        vspapi,
     );
 }
 
@@ -57,12 +48,12 @@ test {
 }
 
 test "validateInput rejects non-YUV420P8" {
-    var fmt = std.mem.zeroes(c.VSVideoFormat);
-    fmt.colorFamily = c.cfRGB;
-    fmt.sampleType = c.stInteger;
+    var fmt = std.mem.zeroes(vs.VideoFormat);
+    fmt.colorFamily = .RGB;
+    fmt.sampleType = .Integer;
     fmt.bitsPerSample = 8;
     fmt.numPlanes = 3;
-    var vi = std.mem.zeroes(c.VSVideoInfo);
+    var vi = std.mem.zeroes(vs.VideoInfo);
     vi.format = fmt;
     vi.width = 720;
     vi.height = 480;
@@ -71,17 +62,17 @@ test "validateInput rejects non-YUV420P8" {
 }
 
 test "validateInput accepts YUV420P8 720x480" {
-    var fmt = std.mem.zeroes(c.VSVideoFormat);
-    fmt.colorFamily = c.cfYUV;
-    fmt.sampleType = c.stInteger;
+    var fmt = std.mem.zeroes(vs.VideoFormat);
+    fmt.colorFamily = .YUV;
+    fmt.sampleType = .Integer;
     fmt.bitsPerSample = 8;
     fmt.subSamplingW = 1;
     fmt.subSamplingH = 1;
     fmt.numPlanes = 3;
-    var vi = std.mem.zeroes(c.VSVideoInfo);
+    var vi = std.mem.zeroes(vs.VideoInfo);
     vi.format = fmt;
     vi.width = 720;
     vi.height = 480;
     vi.numFrames = 100;
-    try std.testing.expectEqual(@as(?[*:0]const u8, null), filter.validateInput(&vi));
+    try std.testing.expectEqual(@as(?[:0]const u8, null), filter.validateInput(&vi));
 }

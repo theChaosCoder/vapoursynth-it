@@ -10,7 +10,9 @@
 //! during `arInitial`) is still parallel under the hood.
 
 const std = @import("std");
-const c = @import("c.zig");
+const vapoursynth = @import("vapoursynth");
+const vs = vapoursynth.vapoursynth4;
+const ZAPI = vapoursynth.ZAPI;
 
 const state = @import("state.zig");
 const plane = @import("plane.zig");
@@ -57,25 +59,25 @@ const FrameViewMut = struct {
     v_stride: usize,
 };
 
-fn viewOf(api: c.VSAPI, frame: *const c.VSFrame) FrameView {
+fn viewOf(zapi: *const ZAPI, frame: *const vs.Frame) FrameView {
     return .{
-        .y = api.getReadPtr.?(frame, 0),
-        .y_stride = @intCast(api.getStride.?(frame, 0)),
-        .u = api.getReadPtr.?(frame, 1),
-        .u_stride = @intCast(api.getStride.?(frame, 1)),
-        .v = api.getReadPtr.?(frame, 2),
-        .v_stride = @intCast(api.getStride.?(frame, 2)),
+        .y = zapi.getReadPtr(frame, 0),
+        .y_stride = @intCast(zapi.getStride(frame, 0)),
+        .u = zapi.getReadPtr(frame, 1),
+        .u_stride = @intCast(zapi.getStride(frame, 1)),
+        .v = zapi.getReadPtr(frame, 2),
+        .v_stride = @intCast(zapi.getStride(frame, 2)),
     };
 }
 
-fn viewOfMut(api: c.VSAPI, frame: *c.VSFrame) FrameViewMut {
+fn viewOfMut(zapi: *const ZAPI, frame: *vs.Frame) FrameViewMut {
     return .{
-        .y = api.getWritePtr.?(frame, 0),
-        .y_stride = @intCast(api.getStride.?(frame, 0)),
-        .u = api.getWritePtr.?(frame, 1),
-        .u_stride = @intCast(api.getStride.?(frame, 1)),
-        .v = api.getWritePtr.?(frame, 2),
-        .v_stride = @intCast(api.getStride.?(frame, 2)),
+        .y = zapi.getWritePtr(frame, 0),
+        .y_stride = @intCast(zapi.getStride(frame, 0)),
+        .u = zapi.getWritePtr(frame, 1),
+        .u_stride = @intCast(zapi.getStride(frame, 1)),
+        .v = zapi.getWritePtr(frame, 2),
+        .v_stride = @intCast(zapi.getStride(frame, 2)),
     };
 }
 
@@ -88,9 +90,9 @@ inline fn toUpper(ch: u8) u8 {
 // ---------------------------------------------------------------------------
 
 pub const Filter = struct {
-    node: *c.VSNode,
+    node: *vs.Node,
     /// We own this VSVideoInfo so we can mutate numFrames / fps for 24fps mode.
-    vi: c.VSVideoInfo,
+    vi: vs.VideoInfo,
 
     fps: i32,
     threshold: i32,
@@ -119,8 +121,8 @@ pub const Filter = struct {
 
     pub fn create(
         allocator: std.mem.Allocator,
-        node: *c.VSNode,
-        vi_src: *const c.VSVideoInfo,
+        node: *vs.Node,
+        vi_src: *const vs.VideoInfo,
         fps: i32,
         threshold: i32,
         pthreshold: i32,
@@ -209,74 +211,66 @@ pub const Filter = struct {
 // ---------------------------------------------------------------------------
 
 pub fn create(
-    in: ?*const c.VSMap,
-    out: ?*c.VSMap,
-    userData: ?*anyopaque,
-    core: ?*c.VSCore,
-    vsapi: [*c]const c.VSAPI,
+    in: ?*const vs.Map,
+    out: ?*vs.Map,
+    user_data: ?*anyopaque,
+    core: ?*vs.Core,
+    vsapi: *const vs.API,
 ) callconv(.c) void {
-    _ = userData;
-    const api = vsapi.*;
-    const out_map = out.?;
+    _ = user_data;
+    const zapi = ZAPI.init(vsapi, core, null);
+    const map_in = zapi.initZMap(in);
+    const map_out = zapi.initZMap(out);
 
-    var err: c_int = 0;
-    const maybe_node = api.mapGetNode.?(in.?, "clip", 0, &err);
-    if (maybe_node == null) {
-        api.mapSetError.?(out_map, "IT: clip required");
+    const node = map_in.getNode("clip") orelse {
+        map_out.setError("IT: clip required");
         return;
-    }
-    const node = maybe_node.?;
-    const vi_ptr = api.getVideoInfo.?(node);
-    if (vi_ptr == null) {
-        api.mapSetError.?(out_map, "IT: could not get video info");
-        api.freeNode.?(node);
-        return;
-    }
-    const vi = vi_ptr.?;
+    };
+    const vi = zapi.getVideoInfo(node);
 
     if (validateInput(vi)) |reason| {
-        api.mapSetError.?(out_map, reason);
-        api.freeNode.?(node);
+        map_out.setError(reason);
+        zapi.freeNode(node);
         return;
     }
 
-    const fps = mapGetIntDefault(api, in.?, "fps", 24);
-    const threshold = mapGetIntDefault(api, in.?, "threshold", 20);
-    const pthreshold = mapGetIntDefault(api, in.?, "pthreshold", 75);
+    const fps = map_in.getValue(i32, "fps") orelse 24;
+    const threshold = map_in.getValue(i32, "threshold") orelse 20;
+    const pthreshold = map_in.getValue(i32, "pthreshold") orelse 75;
 
     if (fps != 24 and fps != 30) {
-        api.mapSetError.?(out_map, "IT: fps must be 24 or 30");
-        api.freeNode.?(node);
+        map_out.setError("IT: fps must be 24 or 30");
+        zapi.freeNode(node);
         return;
     }
 
     // ref: "TOP" (default), "BOTTOM", "ALL", "NONE" — all four
     // Avisynth-compatible modes are implemented.
-    const ref_str = mapGetDataDefault(api, in.?, "ref", "TOP");
+    const ref_str = map_in.getData("ref", 0) orelse "TOP";
     const ref_val: Ref = blk: {
         if (strEqlCi(ref_str, "TOP")) break :blk .top;
         if (strEqlCi(ref_str, "BOTTOM")) break :blk .bottom;
         if (strEqlCi(ref_str, "ALL")) break :blk .all;
         if (strEqlCi(ref_str, "NONE")) break :blk .none;
-        api.mapSetError.?(out_map, "IT: ref must be one of \"TOP\", \"BOTTOM\", \"ALL\", \"NONE\"");
-        api.freeNode.?(node);
+        map_out.setError("IT: ref must be one of \"TOP\", \"BOTTOM\", \"ALL\", \"NONE\"");
+        zapi.freeNode(node);
         return;
     };
-    const blend = mapGetIntDefault(api, in.?, "blend", 0) != 0;
+    const blend = (map_in.getValue(i32, "blend") orelse 0) != 0;
 
     // diMode: 0=NONE (copy with field-match only), 1=DEINTERLACE,
     // 2=SIMPLE_BLUR, 3=ONE_FIELD (the VS upstream default; what we
     // implement today). 1 and 2 would need the original Avisynth
     // implementations ported.
-    const dimode_int = mapGetIntDefault(api, in.?, "diMode", 3);
+    const dimode_int = map_in.getValue(i32, "diMode") orelse 3;
     const dimode_val: DiMode = switch (dimode_int) {
         0 => .none,
         1 => .deinterlace,
         2 => .simple_blur,
         3 => .one_field,
         else => {
-            api.mapSetError.?(out_map, "IT: diMode must be 0, 1, 2 or 3");
-            api.freeNode.?(node);
+            map_out.setError("IT: diMode must be 0, 1, 2 or 3");
+            zapi.freeNode(node);
             return;
         },
     };
@@ -292,60 +286,47 @@ pub fn create(
         blend,
         dimode_val,
     ) catch {
-        api.mapSetError.?(out_map, "IT: out of memory");
-        api.freeNode.?(node);
+        map_out.setError("IT: out of memory");
+        zapi.freeNode(node);
         return;
     };
 
-    var deps = [_]c.VSFilterDependency{
-        .{ .source = node, .requestPattern = c.rpGeneral },
+    var deps = [_]vs.FilterDependency{
+        .{ .source = node, .requestPattern = .General },
     };
 
-    api.createVideoFilter.?(
-        out_map,
-        "IT",
-        &inst.vi,
-        getFrame,
-        free,
-        c.fmParallelRequests,
-        &deps,
-        deps.len,
-        inst,
-        core,
-    );
+    zapi.createVideoFilter(out, "IT", &inst.vi, getFrame, free, .ParallelRequests, &deps, inst);
 }
 
 fn free(
-    instanceData: ?*anyopaque,
-    core: ?*c.VSCore,
-    vsapi: [*c]const c.VSAPI,
+    instance_data: ?*anyopaque,
+    core: ?*vs.Core,
+    vsapi: *const vs.API,
 ) callconv(.c) void {
-    _ = core;
-    const api = vsapi.*;
-    const inst: *Filter = @ptrCast(@alignCast(instanceData.?));
-    api.freeNode.?(inst.node);
+    const zapi = ZAPI.init(vsapi, core, null);
+    const inst: *Filter = @ptrCast(@alignCast(instance_data.?));
+    zapi.freeNode(inst.node);
     inst.destroy();
 }
 
 fn getFrame(
     n: c_int,
-    activationReason: c_int,
-    instanceData: ?*anyopaque,
-    frameData: [*c]?*anyopaque,
-    frameCtx: ?*c.VSFrameContext,
-    core: ?*c.VSCore,
-    vsapi: [*c]const c.VSAPI,
-) callconv(.c) ?*const c.VSFrame {
-    _ = frameData;
-    const inst: *Filter = @ptrCast(@alignCast(instanceData.?));
-    const api = vsapi.*;
-    const ctx = frameCtx.?;
+    activation_reason: vs.ActivationReason,
+    instance_data: ?*anyopaque,
+    frame_data: *?*anyopaque,
+    frame_ctx: ?*vs.FrameContext,
+    core: ?*vs.Core,
+    vsapi: *const vs.API,
+) callconv(.c) ?*const vs.Frame {
+    _ = frame_data;
+    const inst: *Filter = @ptrCast(@alignCast(instance_data.?));
+    const zapi = ZAPI.init(vsapi, core, frame_ctx);
 
-    if (activationReason == c.arInitial) {
-        requestNeededFrames(inst, api, ctx, n);
+    if (activation_reason == .Initial) {
+        requestNeededFrames(inst, &zapi, n);
         return null;
     }
-    if (activationReason != c.arAllFramesReady) return null;
+    if (activation_reason != .AllFramesReady) return null;
 
     // Reset per-call scratch state
     inst.call_state.resetForFrame(n);
@@ -356,29 +337,29 @@ fn getFrame(
     if (inst.fps == 24) {
         tf24 = n + @divTrunc(n, 4);
         base24 = @divTrunc(tf24, 5) * 5;
-        input_n = resolveInputFrame24(inst, api, ctx, n);
+        input_n = resolveInputFrame24(inst, &zapi, n);
     } else {
-        getFrameSub(inst, api, ctx, n);
+        getFrameSub(inst, &zapi, n);
     }
 
     // Fetch the chosen source frame ONCE for prop inheritance. Cached, so
     // the subsequent getFrameFilter calls inside makeOutput are free.
-    const src_for_props = api.getFrameFilter.?(plane.clipFrame(input_n, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(src_for_props);
+    const src_for_props = zapi.getFrameFilter(plane.clipFrame(input_n, inst.max_frames), inst.node);
+    defer zapi.freeFrame(src_for_props);
 
-    const dst_opt = api.newVideoFrame.?(&inst.vi.format, inst.vi.width, inst.vi.height, src_for_props, core);
+    const dst_opt = zapi.newVideoFrame(&inst.vi.format, inst.vi.width, inst.vi.height, src_for_props);
     if (dst_opt == null) return null;
     const dst = dst_opt.?;
 
     var was_blended = false;
     if (inst.fps == 24 and shouldBlendBlock(inst, base24)) {
-        blendInto(inst, api, ctx, core, dst, base24, tf24);
+        blendInto(inst, &zapi, dst, base24, tf24);
         was_blended = true;
     } else {
-        makeOutput(inst, api, ctx, dst, input_n);
+        makeOutput(inst, &zapi, dst, input_n);
     }
 
-    setOutputProps(inst, api, dst, input_n, was_blended);
+    setOutputProps(inst, &zapi, dst, input_n, was_blended);
     return dst;
 }
 
@@ -386,7 +367,7 @@ fn getFrame(
 // Frame-request planning
 // ---------------------------------------------------------------------------
 
-fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_n: i32) void {
+fn requestNeededFrames(inst: *Filter, zapi: *const ZAPI, out_n: i32) void {
     // Frame-reach analysis (worst case):
     //  - ChooseBest(n) reads [n-1, n+1] (srcC, srcP, ensureMotionMap of n+1).
     //  - GetFrameSub(n) -> ChooseBest(n)               : reach [n-1, n+1]
@@ -411,13 +392,13 @@ fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_
         var i: i32 = lo;
         while (i <= hi) : (i += 1) {
             const clipped = plane.clipFrame(i, inst.max_frames);
-            api.requestFrameFilter.?(clipped, inst.node, ctx);
+            zapi.requestFrameFilter(clipped, inst.node);
         }
     } else {
         var i: i32 = out_n - 2;
         while (i <= out_n + 2) : (i += 1) {
             const clipped = plane.clipFrame(i, inst.max_frames);
-            api.requestFrameFilter.?(clipped, inst.node, ctx);
+            zapi.requestFrameFilter(clipped, inst.node);
         }
     }
 }
@@ -442,40 +423,40 @@ fn requestNeededFrames(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_
 ///   * `IT.Iv{C,P,N,M}`   — interlace-evidence counters from EvalIV.
 ///   * `IT.Diff{P0,P1,S0,S1}` — motion stats for the input frame.
 ///   * `IT.Blended`       — 1 when the blend code path produced this frame.
-fn setOutputProps(inst: *Filter, api: c.VSAPI, dst: *c.VSFrame, input_n: i32, was_blended: bool) void {
-    const props_opt = api.getFramePropertiesRW.?(dst);
-    if (props_opt == null) return;
-    const props = props_opt.?;
+fn setOutputProps(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, input_n: i32, was_blended: bool) void {
+    const raw = zapi.getFramePropertiesRW(dst) orelse return;
+    const props = zapi.initZMap(raw);
     const fi = &inst.frame_info[@intCast(input_n)];
 
-    // Standard VS props
-    _ = api.mapSetInt.?(props, "_FieldBased", 0, c.maReplace);
-    const combed: i64 = if (fi.ip == 'I') 1 else 0;
-    _ = api.mapSetInt.?(props, "_Combed", combed, c.maReplace);
-    _ = api.mapSetInt.?(props, "_DurationNum", inst.vi.fpsDen, c.maReplace);
-    _ = api.mapSetInt.?(props, "_DurationDen", inst.vi.fpsNum, c.maReplace);
+    // Standard VS props (typed ZMap helpers map to _FieldBased/_Combed/_Duration*).
+    props.setFieldBased(.PROGRESSIVE);
+    props.setCombed(fi.ip == 'I');
+    props.setDurationNum(inst.vi.fpsDen);
+    props.setDurationDen(inst.vi.fpsNum);
 
     // Single-character diagnostic props (UTF-8 strings of length 1).
-    setChar(api, props, "ITMatch", fi.match);
-    setChar(api, props, "ITMflag", fi.mflag);
-    setChar(api, props, "ITIpFlag", fi.ip);
+    setChar(zapi, raw, "ITMatch", fi.match);
+    setChar(zapi, raw, "ITMflag", fi.mflag);
+    setChar(zapi, raw, "ITIpFlag", fi.ip);
 
-    _ = api.mapSetInt.?(props, "ITIvC", fi.ivC, c.maReplace);
-    _ = api.mapSetInt.?(props, "ITIvP", fi.ivP, c.maReplace);
-    _ = api.mapSetInt.?(props, "ITIvN", fi.ivN, c.maReplace);
-    _ = api.mapSetInt.?(props, "ITIvM", fi.ivM, c.maReplace);
+    props.setInt("ITIvC", fi.ivC, .Replace);
+    props.setInt("ITIvP", fi.ivP, .Replace);
+    props.setInt("ITIvN", fi.ivN, .Replace);
+    props.setInt("ITIvM", fi.ivM, .Replace);
 
-    _ = api.mapSetInt.?(props, "ITDiffP0", fi.diffP0, c.maReplace);
-    _ = api.mapSetInt.?(props, "ITDiffP1", fi.diffP1, c.maReplace);
-    _ = api.mapSetInt.?(props, "ITDiffS0", fi.diffS0, c.maReplace);
-    _ = api.mapSetInt.?(props, "ITDiffS1", fi.diffS1, c.maReplace);
+    props.setInt("ITDiffP0", fi.diffP0, .Replace);
+    props.setInt("ITDiffP1", fi.diffP1, .Replace);
+    props.setInt("ITDiffS0", fi.diffS0, .Replace);
+    props.setInt("ITDiffS1", fi.diffS1, .Replace);
 
-    _ = api.mapSetInt.?(props, "ITBlended", @intFromBool(was_blended), c.maReplace);
+    props.setInt("ITBlended", @intFromBool(was_blended), .Replace);
 }
 
-inline fn setChar(api: c.VSAPI, props: *c.VSMap, key: [*:0]const u8, ch: u8) void {
-    const buf = [_]u8{ch};
-    _ = api.mapSetData.?(props, key, &buf, 1, c.dtUtf8, c.maReplace);
+/// 1-byte UTF-8 prop. Goes through the raw ZAPI path because ZMap.setData
+/// requires comptime keys and these are loop-friendly runtime literals.
+inline fn setChar(zapi: *const ZAPI, props: ?*vs.Map, key: [:0]const u8, ch: u8) void {
+    const buf = [_:0]u8{ch};
+    _ = zapi.mapSetData(props, key, &buf, .Utf8, .Replace);
 }
 
 /// Returns true if `blend=true` actually triggers blending for this 5-frame
@@ -502,23 +483,23 @@ fn shouldBlendBlock(inst: *Filter, base: i32) bool {
 
 /// `BlendFrame_YV12` analogue: render each source frame via MakeOutput,
 /// then run the temporal blend. Allocates `size` temporary VSFrames.
-fn blendInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, core: ?*c.VSCore, dst: *c.VSFrame, base: i32, tf_frame: i32) void {
+fn blendInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, base: i32, tf_frame: i32) void {
     const kernel = blend_mod.buildKernel(tf_frame - base);
     const size: usize = @intCast(kernel.size);
 
     var srcs: [16]blend_mod.SourceView = undefined;
-    var temps: [16]?*c.VSFrame = .{null} ** 16;
-    defer for (temps[0..size]) |t| if (t) |f| api.freeFrame.?(f);
+    var temps: [16]?*vs.Frame = .{null} ** 16;
+    defer for (temps[0..size]) |t| if (t) |f| zapi.freeFrame(f);
 
     var z: usize = 0;
     while (z < size) : (z += 1) {
         const fno = plane.clipFrame(base + kernel.start + @as(i32, @intCast(z)), inst.max_frames);
-        const tmp_opt = api.newVideoFrame.?(&inst.vi.format, inst.vi.width, inst.vi.height, null, core);
+        const tmp_opt = zapi.newVideoFrame(&inst.vi.format, inst.vi.width, inst.vi.height, null);
         if (tmp_opt == null) return;
         const tmp = tmp_opt.?;
         temps[z] = tmp;
-        makeOutput(inst, api, ctx, tmp, fno);
-        const v = viewOfMut(api, tmp);
+        makeOutput(inst, zapi, tmp, fno);
+        const v = viewOfMut(zapi, tmp);
         srcs[z] = .{
             .y = v.y,
             .y_stride = v.y_stride,
@@ -529,7 +510,7 @@ fn blendInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, core: ?*c.VSCo
         };
     }
 
-    const vD = viewOfMut(api, dst);
+    const vD = viewOfMut(zapi, dst);
     blend_mod.blendFrames(
         inst.width,
         inst.height,
@@ -544,13 +525,13 @@ fn blendInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, core: ?*c.VSCo
     );
 }
 
-fn resolveInputFrame24(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_n: i32) i32 {
+fn resolveInputFrame24(inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
     const tf = out_n + @divTrunc(out_n, 4);
     const base = @divTrunc(tf, 5) * 5;
 
     var i: i32 = 0;
     while (i < 5) : (i += 1) {
-        getFrameSub(inst, api, ctx, base + i);
+        getFrameSub(inst, zapi, base + i);
     }
     decide_mod.decide(base, inst.width, inst.height, inst.max_frames, inst.frame_info, inst.block_info);
 
@@ -580,7 +561,7 @@ fn resolveInputFrame24(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, out_
 // GetFrameSub — compute and cache match decision for one input frame.
 // ---------------------------------------------------------------------------
 
-fn getFrameSub(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void {
+fn getFrameSub(inst: *Filter, zapi: *const ZAPI, n: i32) void {
     if (n >= inst.max_frames) return;
     if (inst.frame_info[@intCast(n)].ip != 'U') return;
 
@@ -597,7 +578,7 @@ fn getFrameSub(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void
     // their `width * height` defaults so every frame ends up ip='I' and is
     // dispatched to the deinterlacer of choice. Matches Avisynth original.
     if (inst.ref != .none) {
-        chooseBest(inst, api, ctx, n);
+        chooseBest(inst, zapi, n);
     }
 
     const ni: usize = @intCast(n);
@@ -632,13 +613,13 @@ fn getFrameSub(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void
 // ChooseBest — populate edge map, run EvalIV against C and P, pick best.
 // ---------------------------------------------------------------------------
 
-fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void {
-    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(srcC);
-    const vC = viewOf(api, srcC.?);
+fn chooseBest(inst: *Filter, zapi: *const ZAPI, n: i32) void {
+    const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
+    defer zapi.freeFrame(srcC);
+    const vC = viewOf(zapi, srcC.?);
 
-    ensureMotionMap(inst, api, ctx, inst.call_state.currentFrame);
-    ensureMotionMap(inst, api, ctx, inst.call_state.currentFrame + 1);
+    ensureMotionMap(inst, zapi, inst.call_state.currentFrame);
+    ensureMotionMap(inst, zapi, inst.call_state.currentFrame + 1);
 
     // Even rows of edge map: from srcC at offset 0.
     @memset(inst.call_state.edgeMap, 0);
@@ -653,9 +634,9 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
 
     // Conditional N evaluation (ref="BOTTOM" or "ALL").
     if (inst.b_ref_n) {
-        const srcN = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
-        defer api.freeFrame.?(srcN);
-        const vN = viewOf(api, srcN.?);
+        const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
+        defer zapi.freeFrame(srcN);
+        const vN = viewOf(zapi, srcN.?);
         const ev_n = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
         inst.call_state.iSumN = ev_n.counter;
         inst.call_state.iSumPN = ev_n.counterp;
@@ -663,9 +644,9 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
 
     // Conditional P evaluation (ref="TOP" or "ALL").
     if (inst.b_ref_p) {
-        const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-        defer api.freeFrame.?(srcP);
-        const vP = viewOf(api, srcP.?);
+        const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+        defer zapi.freeFrame(srcP);
+        const vP = viewOf(zapi, srcP.?);
         const ev_p = eval_iv_mod.evalIv(inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
         inst.call_state.iSumP = ev_p.counter;
         inst.call_state.iSumPP = ev_p.counterp;
@@ -691,16 +672,16 @@ fn chooseBest(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n: i32) void 
 // MotionMap cache — fills frame_info[n].diffP0..S1 if not already done.
 // ---------------------------------------------------------------------------
 
-fn ensureMotionMap(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n_in: i32) void {
+fn ensureMotionMap(inst: *Filter, zapi: *const ZAPI, n_in: i32) void {
     const n = plane.clipFrame(n_in, inst.max_frames);
     if (inst.frame_info[@intCast(n)].diffP0 >= 0) return;
 
-    const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-    const srcC = api.getFrameFilter.?(n, inst.node, ctx);
-    defer api.freeFrame.?(srcP);
-    defer api.freeFrame.?(srcC);
-    const vP = viewOf(api, srcP.?);
-    const vC = viewOf(api, srcC.?);
+    const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+    const srcC = zapi.getFrameFilter(n, inst.node);
+    defer zapi.freeFrame(srcP);
+    defer zapi.freeFrame(srcC);
+    const vP = viewOf(zapi, srcP.?);
+    const vC = viewOf(zapi, srcC.?);
 
     const stats = motion_mod.makeMotionMap(inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     inst.frame_info[@intCast(n)].diffP0 = stats.diffP0;
@@ -713,7 +694,7 @@ fn ensureMotionMap(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, n_in: i3
 // MakeOutput — copy or deinterlace, with prev-frame scene-change shortcut.
 // ---------------------------------------------------------------------------
 
-fn makeOutput(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
+fn makeOutput(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const ni: usize = @intCast(n);
     inst.call_state.currentFrame = n;
     inst.call_state.iSumC = inst.frame_info[ni].ivC;
@@ -727,28 +708,28 @@ fn makeOutput(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFra
     inst.call_state.iUseFrame = toUpper(inst.frame_info[ni].match);
 
     if (inst.frame_info[ni].ip == 'P') {
-        copyCpnInto(inst, api, ctx, dst, n);
+        copyCpnInto(inst, zapi, dst, n);
         return;
     }
     // ip == 'I': dispatch on diMode.
     switch (inst.dimode) {
         .none => {
             // DI_MODE_NONE in Avisynth: skip the deinterlacer, just field-copy.
-            copyCpnInto(inst, api, ctx, dst, n);
+            copyCpnInto(inst, zapi, dst, n);
         },
         .deinterlace => {
-            if (!drawPrevFrame(inst, api, ctx, dst, n)) {
-                deinterlaceInto(inst, api, ctx, dst, n);
+            if (!drawPrevFrame(inst, zapi, dst, n)) {
+                deinterlaceInto(inst, zapi, dst, n);
             }
         },
         .simple_blur => {
-            if (!drawPrevFrame(inst, api, ctx, dst, n)) {
-                simpleBlurInto(inst, api, ctx, dst, n);
+            if (!drawPrevFrame(inst, zapi, dst, n)) {
+                simpleBlurInto(inst, zapi, dst, n);
             }
         },
         .one_field => {
-            if (!drawPrevFrame(inst, api, ctx, dst, n)) {
-                deintInto(inst, api, ctx, dst, n);
+            if (!drawPrevFrame(inst, zapi, dst, n)) {
+                deintInto(inst, zapi, dst, n);
             }
         },
     }
@@ -756,144 +737,144 @@ fn makeOutput(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFra
 
 /// `Deinterlace_YV12` wrapper. Builds the motion4DI map via makeMotionMap2Min,
 /// then calls output_mod.deinterlace.
-fn deinterlaceInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
-    const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-    const srcN = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(srcP);
-    defer api.freeFrame.?(srcC);
-    defer api.freeFrame.?(srcN);
-    const vP = viewOf(api, srcP.?);
-    const vC = viewOf(api, srcC.?);
-    const vN = viewOf(api, srcN.?);
+fn deinterlaceInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+    const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+    const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
+    const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
+    defer zapi.freeFrame(srcP);
+    defer zapi.freeFrame(srcC);
+    defer zapi.freeFrame(srcN);
+    const vP = viewOf(zapi, srcP.?);
+    const vC = viewOf(zapi, srcC.?);
+    const vN = viewOf(zapi, srcN.?);
 
     motion_mod.makeMotionMap2Min(inst.width, inst.height, inst.call_state.motionMap4DI, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
 
-    const vD = viewOfMut(api, dst);
+    const vD = viewOfMut(zapi, dst);
     output_mod.deinterlace(inst.width, inst.height, inst.call_state.motionMap4DI, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
 }
 
 /// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds
 /// the blur map into the per-instance motionMap4DI scratch buffer, then
 /// calls `output_mod.simpleBlur` to write into dst.
-fn simpleBlurInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
-    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(srcC);
-    const vC = viewOf(api, srcC.?);
+fn simpleBlurInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+    const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
+    defer zapi.freeFrame(srcC);
+    const vC = viewOf(zapi, srcC.?);
 
-    var srcR_opt: ?*const c.VSFrame = null;
+    var srcR_opt: ?*const vs.Frame = null;
     var vR: FrameView = vC;
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
-            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-            vR = viewOf(api, srcR_opt.?);
+            srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+            vR = viewOf(zapi, srcR_opt.?);
         },
         'N' => {
-            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
-            vR = viewOf(api, srcR_opt.?);
+            srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
+            vR = viewOf(zapi, srcR_opt.?);
         },
         else => {},
     }
-    defer if (srcR_opt) |r| api.freeFrame.?(r);
+    defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
-    const vD = viewOfMut(api, dst);
+    const vD = viewOfMut(zapi, dst);
     output_mod.simpleBlur(inst.width, inst.height, inst.call_state.motionMap4DI, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
 }
 
-fn copyCpnInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
-    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(srcC);
-    const vC = viewOf(api, srcC.?);
-    var srcR_opt: ?*const c.VSFrame = null;
+fn copyCpnInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+    const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
+    defer zapi.freeFrame(srcC);
+    const vC = viewOf(zapi, srcC.?);
+    var srcR_opt: ?*const vs.Frame = null;
     var vR: FrameView = vC;
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
-            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-            vR = viewOf(api, srcR_opt.?);
+            srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+            vR = viewOf(zapi, srcR_opt.?);
         },
         'N' => {
-            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
-            vR = viewOf(api, srcR_opt.?);
+            srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
+            vR = viewOf(zapi, srcR_opt.?);
         },
         else => {},
     }
-    defer if (srcR_opt) |r| api.freeFrame.?(r);
+    defer if (srcR_opt) |r| zapi.freeFrame(r);
 
-    const vD = viewOfMut(api, dst);
+    const vD = viewOfMut(zapi, dst);
     output_mod.copyCPNField(inst.width, inst.height, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vR.y, vR.y_stride, vR.u, vR.u_stride, vR.v, vR.v_stride);
 }
 
-fn deintInto(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) void {
-    const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(srcC);
-    const vC = viewOf(api, srcC.?);
+fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+    const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
+    defer zapi.freeFrame(srcC);
+    const vC = viewOf(zapi, srcC.?);
 
-    var srcR_opt: ?*const c.VSFrame = null;
+    var srcR_opt: ?*const vs.Frame = null;
     var ref_y: [*]const u8 = vC.y;
     var ref_y_stride = vC.y_stride;
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
-            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-            const vR = viewOf(api, srcR_opt.?);
+            srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+            const vR = viewOf(zapi, srcR_opt.?);
             ref_y = vR.y;
             ref_y_stride = vR.y_stride;
         },
         'N' => {
-            srcR_opt = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
-            const vR = viewOf(api, srcR_opt.?);
+            srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
+            const vR = viewOf(zapi, srcR_opt.?);
             ref_y = vR.y;
             ref_y_stride = vR.y_stride;
         },
         else => {},
     }
-    defer if (srcR_opt) |r| api.freeFrame.?(r);
+    defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     // MakeSimpleBlurMap_YV12 -> motionMap4DI
     motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, ref_y, ref_y_stride);
 
     // MakeMotionMap2Max_YV12 -> motionMap4DIMax
-    const srcP = api.getFrameFilter.?(plane.clipFrame(n - 1, inst.max_frames), inst.node, ctx);
-    const srcN = api.getFrameFilter.?(plane.clipFrame(n + 1, inst.max_frames), inst.node, ctx);
-    defer api.freeFrame.?(srcP);
-    defer api.freeFrame.?(srcN);
-    const vP = viewOf(api, srcP.?);
-    const vN = viewOf(api, srcN.?);
+    const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
+    const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
+    defer zapi.freeFrame(srcP);
+    defer zapi.freeFrame(srcN);
+    const vP = viewOf(zapi, srcP.?);
+    const vN = viewOf(zapi, srcN.?);
     motion_mod.makeMotionMap2Max(inst.width, inst.height, inst.call_state.motionMap4DIMax, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
     // during output). Reuse it to avoid an extra allocation, matching the
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
-    const vD = viewOfMut(api, dst);
+    const vD = viewOfMut(zapi, dst);
     output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, vD.y, vD.y_stride, vD.u, vD.u_stride, vD.v, vD.v_stride, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, ref_y, ref_y_stride);
 }
 
-fn drawPrevFrame(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VSFrame, n: i32) bool {
+fn drawPrevFrame(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {
     const n_prev = plane.clipFrame(n - 1, inst.max_frames);
     const n_next = plane.clipFrame(n + 1, inst.max_frames);
     const old_cur = inst.call_state.currentFrame;
     const old_use = inst.call_state.iUseFrame;
 
-    getFrameSub(inst, api, ctx, n_prev);
-    getFrameSub(inst, api, ctx, n_next);
+    getFrameSub(inst, zapi, n_prev);
+    getFrameSub(inst, zapi, n_next);
 
     inst.call_state.currentFrame = old_cur;
 
     var result = false;
     if (inst.frame_info[@intCast(n_prev)].ip == 'P' and inst.frame_info[@intCast(n_next)].ip == 'P') {
-        const srcP = api.getFrameFilter.?(n_prev, inst.node, ctx);
-        const srcC = api.getFrameFilter.?(plane.clipFrame(n, inst.max_frames), inst.node, ctx);
-        defer api.freeFrame.?(srcP);
-        defer api.freeFrame.?(srcC);
-        const vP = viewOf(api, srcP.?);
-        const vC = viewOf(api, srcC.?);
+        const srcP = zapi.getFrameFilter(n_prev, inst.node);
+        const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
+        defer zapi.freeFrame(srcP);
+        defer zapi.freeFrame(srcC);
+        const vP = viewOf(zapi, srcP.?);
+        const vC = viewOf(zapi, srcC.?);
         result = scene_mod.checkSceneChange(inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     }
     if (result) {
         inst.call_state.iUseFrame = inst.frame_info[@intCast(n_prev)].match;
-        copyCpnInto(inst, api, ctx, dst, n_prev);
+        copyCpnInto(inst, zapi, dst, n_prev);
     }
     inst.call_state.iUseFrame = old_use;
     return result;
@@ -903,9 +884,9 @@ fn drawPrevFrame(inst: *Filter, api: c.VSAPI, ctx: *c.VSFrameContext, dst: *c.VS
 // Parameter validation & helpers (moved from plugin.zig)
 // ---------------------------------------------------------------------------
 
-pub fn validateInput(vi: *const c.VSVideoInfo) ?[*:0]const u8 {
-    if (vi.format.colorFamily != c.cfYUV or
-        vi.format.sampleType != c.stInteger or
+pub fn validateInput(vi: *const vs.VideoInfo) ?[:0]const u8 {
+    if (vi.format.colorFamily != .YUV or
+        vi.format.sampleType != .Integer or
         vi.format.bitsPerSample != 8 or
         vi.format.subSamplingW != 1 or
         vi.format.subSamplingH != 1)
@@ -925,33 +906,6 @@ pub fn validateInput(vi: *const c.VSVideoInfo) ?[*:0]const u8 {
         return "IT: width too large (max 8192)";
     }
     return null;
-}
-
-fn mapGetIntDefault(
-    api: c.VSAPI,
-    map: *const c.VSMap,
-    key: [*:0]const u8,
-    default: i32,
-) i32 {
-    var err: c_int = 0;
-    const v = api.mapGetIntSaturated.?(map, key, 0, &err);
-    if (err != 0) return default;
-    return v;
-}
-
-fn mapGetDataDefault(
-    api: c.VSAPI,
-    map: *const c.VSMap,
-    key: [*:0]const u8,
-    default: []const u8,
-) []const u8 {
-    var err: c_int = 0;
-    const ptr = api.mapGetData.?(map, key, 0, &err);
-    if (err != 0 or ptr == null) return default;
-    var sz_err: c_int = 0;
-    const sz = api.mapGetDataSize.?(map, key, 0, &sz_err);
-    if (sz_err != 0 or sz <= 0) return default;
-    return ptr[0..@intCast(sz)];
 }
 
 fn strEqlCi(a: []const u8, b: []const u8) bool {

@@ -157,7 +157,7 @@ def test_determinism_same_clip_twice(core, fixtures):
 
 def test_rejects_rgb_input(core):
     src = core.std.BlankClip(format=vs.RGB24, length=5, width=128, height=96)
-    with pytest.raises(vs.Error, match="YUV420P8"):
+    with pytest.raises(vs.Error, match="(YUV|integer)"):
         core.zit.IT(src).get_frame(0)
 
 

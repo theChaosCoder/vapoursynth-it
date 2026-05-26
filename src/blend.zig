@@ -76,8 +76,8 @@ pub fn buildKernel(n_minus_base: i32) Kernel {
 }
 
 /// View of one source frame's three planes plus their strides. Alias for
-/// `plane.PlaneView` so the caller's `FrameView` flows straight in.
-pub const SourceView = plane.PlaneView;
+/// `plane.PlaneView(u8)` so the caller's `FrameView` flows straight in.
+pub const SourceView = plane.PlaneView(u8);
 
 /// Blend `size` source frames with the per-frame weights from `Kernel`.
 /// Writes into `dst_*` planes. Caller is responsible for fetching the

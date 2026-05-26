@@ -41,11 +41,13 @@ pub const DiMode = enum(u8) { none = 0, deinterlace = 1, simple_blur = 2, one_fi
 const MAX_WIDTH = plane.MAX_WIDTH;
 
 /// Plane access helpers shared with the algorithm modules — `FrameView` and
-/// `FrameViewMut` are local aliases for `plane.PlaneView` / `plane.PlaneViewMut`
-/// so that `viewOf(...)`/`viewOfMut(...)` return the same struct the algorithm
-/// modules accept without any conversion.
-const FrameView = plane.PlaneView;
-const FrameViewMut = plane.PlaneViewMut;
+/// `FrameViewMut` are local aliases for `plane.PlaneView(u8)` /
+/// `plane.PlaneViewMut(u8)` so that `viewOf(...)`/`viewOfMut(...)` return
+/// the same struct the algorithm modules accept without any conversion.
+/// When Phase 1 introduces u16 pipelines these aliases will be replaced by
+/// per-instantiation generic types.
+const FrameView = plane.PlaneView(u8);
+const FrameViewMut = plane.PlaneViewMut(u8);
 
 /// Build a read-only PlaneView from a VS frame. Assumes a 3-plane YUV
 /// format — guaranteed by `validateInput` which rejects everything but

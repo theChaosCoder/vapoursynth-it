@@ -36,9 +36,9 @@ inline fn chromaWidth(width: i32) i32 {
 pub fn copyCPNField(
     width: i32,
     height: i32,
-    dst: *const plane.PlaneViewMut,
-    src: *const plane.PlaneView,
-    ref: *const plane.PlaneView,
+    dst: *const plane.PlaneViewMut(u8),
+    src: *const plane.PlaneView(u8),
+    ref: *const plane.PlaneView(u8),
 ) void {
     const row_y: usize = @intCast(width);
     const row_uv: usize = @intCast(chromaWidth(width));
@@ -75,9 +75,9 @@ pub fn deintOneField(
     simple_blur: []const u8,
     motion2max: []const u8,
     field_map_scratch: []u8,
-    dst: *const plane.PlaneViewMut,
-    src: *const plane.PlaneView,
-    ref: *const plane.PlaneView,
+    dst: *const plane.PlaneViewMut(u8),
+    src: *const plane.PlaneView(u8),
+    ref: *const plane.PlaneView(u8),
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -434,10 +434,10 @@ pub fn deinterlace(
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst: *const plane.PlaneViewMut,
-    src_p: *const plane.PlaneView,
-    src_c: *const plane.PlaneView,
-    src_n: *const plane.PlaneView,
+    dst: *const plane.PlaneViewMut(u8),
+    src_p: *const plane.PlaneView(u8),
+    src_c: *const plane.PlaneView(u8),
+    src_n: *const plane.PlaneView(u8),
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -644,9 +644,9 @@ pub fn simpleBlur(
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst: *const plane.PlaneViewMut,
-    src: *const plane.PlaneView,
-    ref: *const plane.PlaneView,
+    dst: *const plane.PlaneViewMut(u8),
+    src: *const plane.PlaneView(u8),
+    ref: *const plane.PlaneView(u8),
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -828,8 +828,8 @@ test "copyCPNField: identical src and ref produce identical output" {
     @memset(du, 0);
     @memset(dv, 0);
 
-    const dst: plane.PlaneViewMut = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
-    const view: plane.PlaneView = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
+    const dst: plane.PlaneViewMut(u8) = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
+    const view: plane.PlaneView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
     copyCPNField(width, height, &dst, &view, &view);
 
     // Y plane must equal src
@@ -873,9 +873,9 @@ test "copyCPNField: bottom row uses ref, top row uses src" {
     @memset(du, 0);
     @memset(dv, 0);
 
-    const dst: plane.PlaneViewMut = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
-    const src: plane.PlaneView = .{ .y = sy.ptr, .y_stride = w, .u = sub.ptr, .u_stride = w / 2, .v = svb.ptr, .v_stride = w / 2 };
-    const ref: plane.PlaneView = .{ .y = ry.ptr, .y_stride = w, .u = rub.ptr, .u_stride = w / 2, .v = rvb.ptr, .v_stride = w / 2 };
+    const dst: plane.PlaneViewMut(u8) = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
+    const src: plane.PlaneView(u8) = .{ .y = sy.ptr, .y_stride = w, .u = sub.ptr, .u_stride = w / 2, .v = svb.ptr, .v_stride = w / 2 };
+    const ref: plane.PlaneView(u8) = .{ .y = ry.ptr, .y_stride = w, .u = rub.ptr, .u_stride = w / 2, .v = rvb.ptr, .v_stride = w / 2 };
     copyCPNField(width, height, &dst, &src, &ref);
 
     // Even rows (top fields) come from src (0xAA)

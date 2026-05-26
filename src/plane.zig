@@ -21,24 +21,34 @@ pub const CHROMA_LANES = 16;
 /// Read-only view of one frame's Y/U/V plane base pointers + strides.
 /// Used by `filter.zig` to pass extracted plane geometry into the algorithm
 /// modules in one struct instead of six separate parameters per frame.
-pub const PlaneView = struct {
-    y: [*]const u8,
-    y_stride: usize,
-    u: [*]const u8,
-    u_stride: usize,
-    v: [*]const u8,
-    v_stride: usize,
-};
+///
+/// Generic over the pixel storage type `T`. Use `PlaneView(u8)` for 8-bit
+/// pipelines and `PlaneView(u16)` for 10/12/16-bit pipelines (VS stores
+/// >8-bit integer samples in u16 with the upper bits zero). Strides are in
+/// samples (T-elements per row), not bytes; `filter.viewOf` converts the
+/// byte stride VS returns to sample stride at construction time.
+pub fn PlaneView(comptime T: type) type {
+    return struct {
+        y: [*]const T,
+        y_stride: usize,
+        u: [*]const T,
+        u_stride: usize,
+        v: [*]const T,
+        v_stride: usize,
+    };
+}
 
-/// Writable counterpart to `PlaneView` for destination frames.
-pub const PlaneViewMut = struct {
-    y: [*]u8,
-    y_stride: usize,
-    u: [*]u8,
-    u_stride: usize,
-    v: [*]u8,
-    v_stride: usize,
-};
+/// Writable counterpart to `PlaneView(T)` for destination frames.
+pub fn PlaneViewMut(comptime T: type) type {
+    return struct {
+        y: [*]T,
+        y_stride: usize,
+        u: [*]T,
+        u_stride: usize,
+        v: [*]T,
+        v_stride: usize,
+    };
+}
 
 /// Adjusts a parameter relative to a 720x480 (NTSC) reference resolution.
 ///
@@ -66,7 +76,7 @@ pub fn clipYH(y: i32, height: i32) i32 {
 }
 
 /// Source y-pointer. Given a plane base pointer, stride and logical row,
-/// returns a slice starting at the correct byte offset.
+/// returns a pointer starting at the correct sample offset.
 ///
 /// `plane == 0` (luma): one pointer per actual scan line.
 /// `plane != 0` (chroma): upstream re-maps to `((y >> 2) << 1) + (y % 2)`,
@@ -79,13 +89,17 @@ pub fn clipYH(y: i32, height: i32) i32 {
 /// but internally only `plane == 0` vs `plane != 0` matters — U vs V is
 /// distinguished entirely by the `base`/`stride` arguments. Callers MUST
 /// pass the right base/stride for the plane they intend.
+///
+/// Generic via `anytype` on `base` — element type is inferred from the
+/// pointer, return type matches. `stride` is in SAMPLES (T-elements) per
+/// row, not bytes.
 pub fn syp(
-    base: [*]const u8,
+    base: anytype,
     stride: usize,
     height: i32,
     plane: u32,
     y: i32,
-) [*]const u8 {
+) @TypeOf(base) {
     const yi = clipY(y, height);
     const row: usize = if (plane == 0)
         @intCast(yi)
@@ -98,12 +112,12 @@ pub fn syp(
 /// semantics — only `plane == 0` vs `plane != 0` is examined; U vs V is
 /// distinguished by `base`/`stride`.
 pub fn dyp(
-    base: [*]u8,
+    base: anytype,
     stride: usize,
     height: i32,
     plane: u32,
     y: i32,
-) [*]u8 {
+) @TypeOf(base) {
     const yi = clipY(y, height);
     const row: usize = if (plane == 0)
         @intCast(yi)
@@ -145,7 +159,7 @@ test "clipYH halves the height" {
 test "syp luma is just y * stride" {
     var buf = [_]u8{0} ** (480 * 720);
     buf[5 * 720 + 10] = 0xAA;
-    const ptr = syp(&buf, 720, 480, 0, 5);
+    const ptr = syp(@as([*]const u8, &buf), 720, 480, 0, 5);
     try std.testing.expectEqual(@as(u8, 0xAA), ptr[10]);
 }
 
@@ -158,8 +172,9 @@ test "syp chroma uses ((y>>2)<<1)+(y%2) mapping" {
     buf[2 * 360 + 0] = 0x11;
     buf[3 * 360 + 0] = 0x22;
     buf[4 * 360 + 0] = 0x33;
-    try std.testing.expectEqual(@as(u8, 0x11), syp(&buf, 360, 480, 1, 4)[0]);
-    try std.testing.expectEqual(@as(u8, 0x22), syp(&buf, 360, 480, 1, 5)[0]);
-    try std.testing.expectEqual(@as(u8, 0x22), syp(&buf, 360, 480, 1, 7)[0]);
-    try std.testing.expectEqual(@as(u8, 0x33), syp(&buf, 360, 480, 1, 8)[0]);
+    const ptr: [*]const u8 = &buf;
+    try std.testing.expectEqual(@as(u8, 0x11), syp(ptr, 360, 480, 1, 4)[0]);
+    try std.testing.expectEqual(@as(u8, 0x22), syp(ptr, 360, 480, 1, 5)[0]);
+    try std.testing.expectEqual(@as(u8, 0x22), syp(ptr, 360, 480, 1, 7)[0]);
+    try std.testing.expectEqual(@as(u8, 0x33), syp(ptr, 360, 480, 1, 8)[0]);
 }

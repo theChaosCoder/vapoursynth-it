@@ -70,12 +70,17 @@ pub const CTFblockInfo = extern struct {
 /// instance (sound under fmParallelRequests where calls are serialised) or
 /// stack-allocated per-call later if we ever switch to fmParallel.
 pub const CallState = struct {
-    /// scratch buffers, lifetime = one GetFrame call. The buffers are not
-    /// zeroed here — every consumer either writes all bytes it later reads
-    /// (makeSimpleBlurMap / makeMotionMap2Max) or pairs its partial-row
-    /// writes with reads that match (makeMotionMap2Min writes even rows,
-    /// the deinterlacer only reads even rows). The edge map is zeroed
-    /// just-in-time inside chooseBest before makeDeMap fills it.
+    /// scratch buffers, lifetime = one GetFrame call. Not zeroed per-frame —
+    /// each consumer either writes every byte it later reads
+    /// (makeSimpleBlurMap, makeMotionMap2Max) or pairs partial-row writes
+    /// with matching partial-row reads, with one exception: makeMotionMap2Min
+    /// writes only even rows of `motionMap4DI`, but `output.deinterlace`'s
+    /// last iteration reads `pmMB` at the clipped row `height-1` (odd).
+    /// `motionMap4DI` is therefore zero-initialised once at filter-create
+    /// and the odd rows stay defined for the filter's lifetime (only the
+    /// diMode=1 path writes this buffer, and only at even rows).
+    /// The edge map is zeroed just-in-time inside chooseBest before
+    /// makeDeMap fills it.
     edgeMap: []u8,
     motionMap4DI: []u8,
     motionMap4DIMax: []u8,
@@ -92,8 +97,6 @@ pub const CallState = struct {
     iSumPN: i64 = 0,
     iSumPM: i64 = 0,
 
-    bRefP: bool = true,
-
     /// 'C', 'P', 'N' (uppercase = strong match, lowercase = weak) — picked by
     /// chooseBest and consumed by the output stage.
     iUseFrame: u8 = 'C',
@@ -108,7 +111,6 @@ pub const CallState = struct {
         self.iSumPP = 0;
         self.iSumPN = 0;
         self.iSumPM = 0;
-        self.bRefP = true;
         self.iUseFrame = 'C';
     }
 };

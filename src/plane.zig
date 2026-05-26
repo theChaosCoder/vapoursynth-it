@@ -74,6 +74,11 @@ pub fn clipYH(y: i32, height: i32) i32 {
 ///   sub-sampling) AND chroma top/bottom fields are interleaved. The result
 ///   may look strange but it's exactly what upstream produces — and our
 ///   golden-frame oracle uses the same formula.
+///
+/// The `plane` argument is u32 for upstream-index parity (0=Y, 1=U, 2=V),
+/// but internally only `plane == 0` vs `plane != 0` matters — U vs V is
+/// distinguished entirely by the `base`/`stride` arguments. Callers MUST
+/// pass the right base/stride for the plane they intend.
 pub fn syp(
     base: [*]const u8,
     stride: usize,
@@ -89,7 +94,9 @@ pub fn syp(
     return base + row * stride;
 }
 
-/// Destination y-pointer (mutable counterpart to `syp`).
+/// Destination y-pointer (mutable counterpart to `syp`). Same plane-index
+/// semantics — only `plane == 0` vs `plane != 0` is examined; U vs V is
+/// distinguished by `base`/`stride`.
 pub fn dyp(
     base: [*]u8,
     stride: usize,

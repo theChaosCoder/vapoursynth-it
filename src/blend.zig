@@ -65,6 +65,11 @@ pub fn buildKernel(n_minus_base: i32) Kernel {
         const t3 = t2 + getF((@as(f64, @floatFromInt(start + i)) - pos) * filter_step) / t;
         const v = @as(i32, @intFromFloat(t3 * 256.0 + 0.5)) - @as(i32, @intFromFloat(t2 * 256.0 + 0.5));
         t2 = t3;
+        // blendFrames `@intCast`s each weight to u16 — guard the invariant
+        // at the source so a future kernel change (sinc/Lanczos with
+        // negative lobes, wider scale) surfaces here rather than as a
+        // ReleaseFast trap on the cast site.
+        std.debug.assert(v >= 0 and v <= std.math.maxInt(u16));
         k.weights[@intCast(i)] = v;
     }
     return k;

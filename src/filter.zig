@@ -47,6 +47,10 @@ const MAX_WIDTH = plane.MAX_WIDTH;
 const FrameView = plane.PlaneView;
 const FrameViewMut = plane.PlaneViewMut;
 
+/// Build a read-only PlaneView from a VS frame. Assumes a 3-plane YUV
+/// format — guaranteed by `validateInput` which rejects everything but
+/// YUV420P8. Pointer/stride lifetime is tied to `frame`; callers must not
+/// hold the returned view past the frame's `freeFrame`.
 fn viewOf(zapi: *const ZAPI, frame: *const vs.Frame) FrameView {
     return .{
         .y = zapi.getReadPtr(frame, 0),
@@ -58,6 +62,7 @@ fn viewOf(zapi: *const ZAPI, frame: *const vs.Frame) FrameView {
     };
 }
 
+/// Writable counterpart to `viewOf`. Same 3-plane / lifetime contract.
 fn viewOfMut(zapi: *const ZAPI, frame: *vs.Frame) FrameViewMut {
     return .{
         .y = zapi.getWritePtr(frame, 0),
@@ -135,6 +140,10 @@ pub const Filter = struct {
         errdefer allocator.free(edge_buf);
         const m1 = try allocator.alloc(u8, wh);
         errdefer allocator.free(m1);
+        // makeMotionMap2Min writes only even rows; deinterlace's last
+        // iteration reads pmMB at the clipped row height-1 (odd). One-shot
+        // zero-init keeps odd rows defined for the filter's lifetime.
+        @memset(m1, 0);
         const m2 = try allocator.alloc(u8, wh);
         errdefer allocator.free(m2);
 
@@ -560,7 +569,6 @@ fn getFrameSub(inst: *Filter, zapi: *const ZAPI, n: i32) void {
     inst.call_state.iSumP = init_sum;
     inst.call_state.iSumN = init_sum;
     inst.call_state.iSumM = init_sum;
-    inst.call_state.bRefP = inst.b_ref_p;
 
     // ref="NONE" skips ChooseBest entirely — leaves the iSum* values at
     // their `width * height` defaults so every frame ends up ip='I' and is
@@ -692,7 +700,6 @@ fn makeOutput(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     inst.call_state.iSumPC = inst.frame_info[ni].ivPC;
     inst.call_state.iSumPP = inst.frame_info[ni].ivPP;
     inst.call_state.iSumPN = inst.frame_info[ni].ivPN;
-    inst.call_state.bRefP = true;
     inst.call_state.iUseFrame = toUpper(inst.frame_info[ni].match);
 
     if (inst.frame_info[ni].ip == 'P') {
@@ -750,6 +757,10 @@ fn simpleBlurInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void
     defer zapi.freeFrame(srcC);
     const vC = viewOf(zapi, srcC.?);
 
+    // When iUseFrame is 'C' (default), `vR` is a value copy of `vC` — both
+    // views point at the same frame bytes. The algorithm reads only, so the
+    // duplicated pointers are harmless. Reassigned to the P/N frame's view
+    // in the corresponding switch arms.
     var srcR_opt: ?*const vs.Frame = null;
     var vR: FrameView = vC;
     switch (toUpper(inst.call_state.iUseFrame)) {
@@ -775,6 +786,10 @@ fn copyCpnInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
     const vC = viewOf(zapi, srcC.?);
+    // When iUseFrame is 'C' (default), `vR` is a value copy of `vC` — both
+    // views point at the same frame bytes. The algorithm reads only, so the
+    // duplicated pointers are harmless. Reassigned to the P/N frame's view
+    // in the corresponding switch arms.
     var srcR_opt: ?*const vs.Frame = null;
     var vR: FrameView = vC;
     switch (toUpper(inst.call_state.iUseFrame)) {
@@ -799,28 +814,27 @@ fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     defer zapi.freeFrame(srcC);
     const vC = viewOf(zapi, srcC.?);
 
+    // When iUseFrame is 'C' (default), `vR` is a value copy of `vC` — both
+    // views point at the same frame bytes. The algorithm reads only, so the
+    // duplicated pointers are harmless. Reassigned to the P/N frame's view
+    // in the corresponding switch arms.
     var srcR_opt: ?*const vs.Frame = null;
-    var ref_y: [*]const u8 = vC.y;
-    var ref_y_stride = vC.y_stride;
+    var vR: FrameView = vC;
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
-            const vR = viewOf(zapi, srcR_opt.?);
-            ref_y = vR.y;
-            ref_y_stride = vR.y_stride;
+            vR = viewOf(zapi, srcR_opt.?);
         },
         'N' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
-            const vR = viewOf(zapi, srcR_opt.?);
-            ref_y = vR.y;
-            ref_y_stride = vR.y_stride;
+            vR = viewOf(zapi, srcR_opt.?);
         },
         else => {},
     }
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     // MakeSimpleBlurMap_YV12 -> motionMap4DI
-    motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, ref_y, ref_y_stride);
+    motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     // MakeMotionMap2Max_YV12 -> motionMap4DIMax
     const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
@@ -836,7 +850,7 @@ fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
     const vD = viewOfMut(zapi, dst);
-    output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, ref_y, ref_y_stride);
+    output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
 }
 
 fn drawPrevFrame(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {

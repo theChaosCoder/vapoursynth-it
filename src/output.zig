@@ -77,8 +77,7 @@ pub fn deintOneField(
     field_map_scratch: []u8,
     dst: *const plane.PlaneViewMut,
     src: *const plane.PlaneView,
-    ref_y: [*]const u8,
-    ref_y_stride: usize,
+    ref: *const plane.PlaneView,
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -124,7 +123,7 @@ pub fn deintOneField(
     y = 0;
     while (y < height) : (y += 2) {
         const pC = plane.syp(src.y, src.y_stride, height, 0, y);
-        const pB = plane.syp(ref_y, ref_y_stride, height, 0, y + 1);
+        const pB = plane.syp(ref.y, ref.y_stride, height, 0, y + 1);
         const pBB = plane.syp(src.y, src.y_stride, height, 0, y + 2);
         const pC_U = plane.syp(src.u, src.u_stride, height, 1, y);
         const pBB_U = plane.syp(src.u, src.u_stride, height, 1, y + 4);
@@ -295,8 +294,12 @@ const Iv5Rows = struct {
 /// `write_luma` / `write_chroma` are comptime: the SIMD body's chroma
 /// loop calls with `write_luma=false` because luma is already written by
 /// the SIMD store; the scalar tail's chroma rows call with both `true`.
-/// Both branches share the IV scoring because the combined luma+chroma
-/// score drives both decisions — separating would re-cost the chroma IV.
+///
+/// IMPORTANT: chroma IV scores are computed UNCONDITIONALLY regardless of
+/// `write_chroma`, because the combined luma+chroma `iv` is what drives
+/// BOTH the luma pick and the motion-override gate. Do not "optimise"
+/// away the chroma IV math when `write_chroma=false` — it will change the
+/// luma output. `write_chroma` only gates the chroma WRITE, not the SCORE.
 inline fn deinterlacePixelScalar(
     comptime write_luma: bool,
     comptime write_chroma: bool,
@@ -588,26 +591,17 @@ pub fn deinterlace(
             const result_no_motion = @select(u8, c_wins, v_c, pix_np);
             const final_iv = @select(u8, c_wins, ivc_v, iv_np);
 
-            // Motion-gated vertical-average override.
-            //
-            // TODO: `vavg` here uses `pavgb` (= (t+b+1) >> 1, rounded). The
-            // scalar tail (via deinterlacePixelScalar) and the Avisynth C
-            // upstream both use `(t+b) >> 1` (truncated). Result: at pixels
-            // where the motion-override fires and (pT[x]+pB[x]) is odd, our
-            // SIMD path differs by ±1 from the scalar/upstream path. Only
-            // affects diMode=1 (DEINTERLACE); the vapoursynth-cpp-api4
-            // reference plugin hardcodes one_field, so we can't validate
-            // diMode=1 against ground truth yet. Fix is one-liner once we
-            // have an oracle (Avisynth IT.dll build or hand-computed
-            // fixtures): replace `simd.pavgb(LL, v_t, v_b)` with
-            // `@intCast((@as(@Vector(LL, u16), v_t) + @as(@Vector(LL, u16),
-            // v_b)) >> @splat(1))`.
+            // Motion-gated vertical-average override. `vavg` is the truncated
+            // (t+b)>>1, matching deinterlacePixelScalar and the Avisynth C
+            // upstream. Rounded pavgb would differ by 1 LSB at pixels where
+            // (pT[x]+pB[x]) is odd and would not match the scalar tail of
+            // the same row.
             const mt_v = simd.load(LL, pmMT.ptr, xx);
             const mb_v = simd.load(LL, pmMB.ptr, xx);
             const motion_high: @Vector(LL, bool) = (mt_v > motion_th) | (mb_v > motion_th);
             const iv_high: @Vector(LL, bool) = final_iv > ivk_th;
             const draw_mask = iv_high & motion_high;
-            const vavg = simd.pavgb(LL, v_t, v_b);
+            const vavg: @Vector(LL, u8) = @intCast((@as(@Vector(LL, u16), v_t) + @as(@Vector(LL, u16), v_b)) >> @as(@Vector(LL, u4), @splat(1)));
             const result = @select(u8, draw_mask, vavg, result_no_motion);
             simd.store(LL, pD, xx, result);
 
@@ -857,22 +851,31 @@ test "copyCPNField: bottom row uses ref, top row uses src" {
     defer std.testing.allocator.free(ry);
     const dy = try std.testing.allocator.alloc(u8, w * h);
     defer std.testing.allocator.free(dy);
-    const uvb = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
-    defer std.testing.allocator.free(uvb);
-    const uvr = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
-    defer std.testing.allocator.free(uvr);
-    const duv = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
-    defer std.testing.allocator.free(duv);
+    const sub = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
+    defer std.testing.allocator.free(sub);
+    const svb = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
+    defer std.testing.allocator.free(svb);
+    const rub = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
+    defer std.testing.allocator.free(rub);
+    const rvb = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
+    defer std.testing.allocator.free(rvb);
+    const du = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
+    defer std.testing.allocator.free(du);
+    const dv = try std.testing.allocator.alloc(u8, (w / 2) * (h / 2));
+    defer std.testing.allocator.free(dv);
     @memset(sy, 0xAA);
     @memset(ry, 0xBB);
-    @memset(uvb, 0);
-    @memset(uvr, 0);
+    @memset(sub, 0);
+    @memset(svb, 0);
+    @memset(rub, 0);
+    @memset(rvb, 0);
     @memset(dy, 0);
-    @memset(duv, 0);
+    @memset(du, 0);
+    @memset(dv, 0);
 
-    const dst: plane.PlaneViewMut = .{ .y = dy.ptr, .y_stride = w, .u = duv.ptr, .u_stride = w / 2, .v = duv.ptr, .v_stride = w / 2 };
-    const src: plane.PlaneView = .{ .y = sy.ptr, .y_stride = w, .u = uvb.ptr, .u_stride = w / 2, .v = uvb.ptr, .v_stride = w / 2 };
-    const ref: plane.PlaneView = .{ .y = ry.ptr, .y_stride = w, .u = uvr.ptr, .u_stride = w / 2, .v = uvr.ptr, .v_stride = w / 2 };
+    const dst: plane.PlaneViewMut = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
+    const src: plane.PlaneView = .{ .y = sy.ptr, .y_stride = w, .u = sub.ptr, .u_stride = w / 2, .v = svb.ptr, .v_stride = w / 2 };
+    const ref: plane.PlaneView = .{ .y = ry.ptr, .y_stride = w, .u = rub.ptr, .u_stride = w / 2, .v = rvb.ptr, .v_stride = w / 2 };
     copyCPNField(width, height, &dst, &src, &ref);
 
     // Even rows (top fields) come from src (0xAA)

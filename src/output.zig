@@ -12,34 +12,42 @@
 //! Both functions are stateless on their pointer arguments; they receive
 //! pre-fetched plane pointers / strides from the caller. The caller is also
 //! responsible for picking the reference frame (`refY/U/V`) per `iUseFrame`.
+//!
+//! Generic over pixel storage `T` (u8/u16) and bit-depth `bits`. Map buffers
+//! (motion2max, simple_blur, field_map_scratch, motion4di) stay u8; consumer
+//! thresholds (12, 4, etc.) on those reads are 8-bit-calibrated regardless
+//! of pixel depth. The IV-threshold (8) on pixel-diff IV scores scales as
+//! `8 << (bits - 8)` so motion-override semantics track the bit-depth.
 
 const std = @import("std");
 const plane = @import("plane.zig");
 const simd = @import("simd.zig");
 const scalar = @import("scalar.zig");
 
-/// Copies one byte-row from src to dst using independent strides.
-inline fn bitblt(dst: [*]u8, src: [*]const u8, row_size: usize) void {
+/// Copies one row from src to dst (T-elements, not bytes). Wraps @memcpy
+/// so call sites stay tidy.
+inline fn bitblt(comptime T: type, dst: [*]T, src: [*]const T, row_size: usize) void {
     @memcpy(dst[0..row_size], src[0..row_size]);
 }
 
 /// Y-plane row-size for `width`. Chroma is `width >> subSamplingW`; for
-/// YUV420P8 that's `width / 2`.
+/// YUV420 that's `width / 2`.
 inline fn chromaWidth(width: i32) i32 {
     return width >> 1;
 }
 
-/// `CopyCPNField`. `srcC*` are the current frame's planes; `srcR*` are the
-/// chosen reference (= srcC when iUseFrame=='C', otherwise prev/next frame).
-/// Strides for the destination are taken separately because VS may align them
-/// differently from source.
-pub fn copyCPNField(
+/// `CopyCPNField`. `src` is the current frame; `ref` is the chosen reference
+/// (= `src` when iUseFrame=='C', otherwise prev/next frame).
+pub inline fn copyCPNField(
+    comptime T: type,
+    comptime bits: u8,
     width: i32,
     height: i32,
-    dst: *const plane.PlaneViewMut(u8),
-    src: *const plane.PlaneView(u8),
-    ref: *const plane.PlaneView(u8),
+    dst: *const plane.PlaneViewMut(T),
+    src: *const plane.PlaneView(T),
+    ref: *const plane.PlaneView(T),
 ) void {
+    _ = bits;
     const row_y: usize = @intCast(width);
     const row_uv: usize = @intCast(chromaWidth(width));
 
@@ -48,14 +56,14 @@ pub fn copyCPNField(
         const y = yy + 1;
         const yo = yy;
         // Y: top row from srcC, bottom from ref
-        bitblt(plane.dyp(dst.y, dst.y_stride, height, 0, yo), plane.syp(src.y, src.y_stride, height, 0, yo), row_y);
-        bitblt(plane.dyp(dst.y, dst.y_stride, height, 0, y), plane.syp(ref.y, ref.y_stride, height, 0, y), row_y);
+        bitblt(T, plane.dyp(dst.y, dst.y_stride, height, 0, yo), plane.syp(src.y, src.y_stride, height, 0, yo), row_y);
+        bitblt(T, plane.dyp(dst.y, dst.y_stride, height, 0, y), plane.syp(ref.y, ref.y_stride, height, 0, y), row_y);
 
         if (@mod(yy >> 1, 2) != 0) {
-            bitblt(plane.dyp(dst.u, dst.u_stride, height, 1, yo), plane.syp(src.u, src.u_stride, height, 1, yo), row_uv);
-            bitblt(plane.dyp(dst.u, dst.u_stride, height, 1, y), plane.syp(ref.u, ref.u_stride, height, 1, y), row_uv);
-            bitblt(plane.dyp(dst.v, dst.v_stride, height, 2, yo), plane.syp(src.v, src.v_stride, height, 2, yo), row_uv);
-            bitblt(plane.dyp(dst.v, dst.v_stride, height, 2, y), plane.syp(ref.v, ref.v_stride, height, 2, y), row_uv);
+            bitblt(T, plane.dyp(dst.u, dst.u_stride, height, 1, yo), plane.syp(src.u, src.u_stride, height, 1, yo), row_uv);
+            bitblt(T, plane.dyp(dst.u, dst.u_stride, height, 1, y), plane.syp(ref.u, ref.u_stride, height, 1, y), row_uv);
+            bitblt(T, plane.dyp(dst.v, dst.v_stride, height, 2, yo), plane.syp(src.v, src.v_stride, height, 2, yo), row_uv);
+            bitblt(T, plane.dyp(dst.v, dst.v_stride, height, 2, y), plane.syp(ref.v, ref.v_stride, height, 2, y), row_uv);
         }
     }
 }
@@ -69,16 +77,19 @@ pub fn copyCPNField(
 /// `field_map_scratch` is a writable `width * height` buffer used internally
 /// and clobbered on return; pass in the IT instance's existing scratch
 /// allocation rather than alloc-per-call.
-pub fn deintOneField(
+pub inline fn deintOneField(
+    comptime T: type,
+    comptime bits: u8,
     width: i32,
     height: i32,
     simple_blur: []const u8,
     motion2max: []const u8,
     field_map_scratch: []u8,
-    dst: *const plane.PlaneViewMut(u8),
-    src: *const plane.PlaneView(u8),
-    ref: *const plane.PlaneView(u8),
+    dst: *const plane.PlaneViewMut(T),
+    src: *const plane.PlaneView(T),
+    ref: *const plane.PlaneView(T),
 ) void {
+    _ = bits;
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
     std.debug.assert(simple_blur.len == w * h);
@@ -88,7 +99,8 @@ pub fn deintOneField(
     @memset(field_map_scratch, 0);
 
     // Build the field map: pixels where both blur and motion2max are
-    // "noticeably bright" along three columns get tagged.
+    // "noticeably bright" along three columns get tagged. Map values are
+    // u8 (downscaled at write time), so thresholds stay 8-bit literals.
     const nTh: u8 = 12;
     const nThLine: u8 = 1;
     var y: i32 = 0;
@@ -151,14 +163,9 @@ pub fn deintOneField(
         const fmB_base: isize = @as(isize, @intCast(fmB_row)) * @as(isize, @intCast(w));
         const buf_len: isize = @intCast(field_map_scratch.len);
 
-        // Read field_map with absolute offsets, matching upstream's pointer
-        // arithmetic: `pFM[x-1]` at x=0 spills into the previous row's last
-        // byte, and `pFM[x+1]` at x=width-1 spills into the next row's first
-        // byte. The C++ original relies on the field map being one
-        // contiguous `new unsigned char[width*height]` allocation; we
-        // replicate that lookup pattern bit-for-bit. Only the *very* first
-        // and last bytes of the whole buffer (which are UB-reads in upstream
-        // and happen to land on heap padding) are clamped to 0.
+        // Read field_map with absolute offsets — see the long doc-comment
+        // about upstream's spilling-pointer-arithmetic; we replicate it
+        // bit-for-bit and clamp only the very-first and very-last bytes.
         const fm_at = struct {
             inline fn get(buf: []const u8, idx: isize, total: isize) u8 {
                 if (idx < 0 or idx >= total) return 0;
@@ -166,12 +173,8 @@ pub fn deintOneField(
             }
         }.get;
 
-        const D_LANES = 16;
-        // The field-map reads at offset (fm_base ± xi-1 .. fm_base ± xi+1)
-        // are safe for the bulk of the buffer; only the very first byte
-        // (when fm_base=0 and x=0 → idx = -1) and the very last byte
-        // (when fmB_base=last_row and x=w-1 → idx = h*w) ever spill.
-        // We scalar-handle x=0 + the trailing tail and SIMD the middle.
+        // SIMD lane count for luma — keep 256-bit width: 16 for u8, 8 for u16.
+        const D_LANES: usize = 16 / @sizeOf(T);
         var x: usize = 0;
         // Scalar prologue: x=0
         if (w > 0) {
@@ -183,18 +186,16 @@ pub fn deintOneField(
             const fmB_c = fm_at(field_map_scratch, fmB_base, buf_len);
             const fmB_r = fm_at(field_map_scratch, fmB_base + 1, buf_len);
             const need_blend = (fm_l == 1 or fm_c == 1 or fm_r == 1) or (fmB_l == 1 or fmB_c == 1 or fmB_r == 1);
-            const blended: u8 = @intCast((@as(u16, pC[0]) + @as(u16, pBB[0]) + 1) >> 1);
+            const blended: T = scalar.pavgb(pC[0], pBB[0]);
             pDB[0] = if (need_blend) blended else pB[0];
             if (@mod(y >> 1, 2) != 0) {
-                pDB_U[x_half] = @intCast((@as(u16, pC_U[x_half]) + @as(u16, pBB_U[x_half]) + 1) >> 1);
-                pDB_V[x_half] = @intCast((@as(u16, pC_V[x_half]) + @as(u16, pBB_V[x_half]) + 1) >> 1);
+                pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
+                pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
             }
             x = 1;
         }
 
-        // SIMD body — m_l reads from fm_base+x-1, m_r reads up to fm_base+x+LANES.
-        // Both must stay within the buffer; the loop bound `x+LANES+1 <= w`
-        // ensures both rows' reads stay within their respective rows.
+        // SIMD body — bounds: m_l reads from x-1, m_r reads up to x+D_LANES.
         const fm_zero: @Vector(D_LANES, u8) = @splat(0);
         while (x + D_LANES + 1 <= w) : (x += D_LANES) {
             const fm_off: usize = @intCast(fm_base + @as(isize, @intCast(x)));
@@ -212,11 +213,11 @@ pub fn deintOneField(
             const bb_v = simd.load(D_LANES, pBB, x);
             const b_v = simd.load(D_LANES, pB, x);
             const blended = simd.pavgb(D_LANES, c_v, bb_v);
-            const result = @select(u8, blend_mask, blended, b_v);
+            const result = @select(T, blend_mask, blended, b_v);
             simd.store(D_LANES, pDB, x, result);
 
             // Chroma is unconditional (no need_blend dependency) — always
-            // the vertical pavgb. Process D_LANES/2 chroma bytes per luma
+            // the vertical pavgb. Process D_LANES/2 chroma samples per luma
             // chunk so the indices stay aligned.
             if (@mod(y >> 1, 2) != 0) {
                 const xh: usize = x >> 1;
@@ -241,14 +242,12 @@ pub fn deintOneField(
             const fmB_c = fm_at(field_map_scratch, fmB_base + xi, buf_len);
             const fmB_r = fm_at(field_map_scratch, fmB_base + xi + 1, buf_len);
             const need_blend = (fm_l == 1 or fm_c == 1 or fm_r == 1) or (fmB_l == 1 or fmB_c == 1 or fmB_r == 1);
-            const blended: u8 = @intCast((@as(u16, pC[x]) + @as(u16, pBB[x]) + 1) >> 1);
+            const blended: T = scalar.pavgb(pC[x], pBB[x]);
             pDB[x] = if (need_blend) blended else pB[x];
 
             if (@mod(y >> 1, 2) != 0) {
-                const u_avg: u8 = @intCast((@as(u16, pC_U[x_half]) + @as(u16, pBB_U[x_half]) + 1) >> 1);
-                const v_avg: u8 = @intCast((@as(u16, pC_V[x_half]) + @as(u16, pBB_V[x_half]) + 1) >> 1);
-                pDB_U[x_half] = u_avg;
-                pDB_V[x_half] = v_avg;
+                pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
+                pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
             }
         }
     }
@@ -258,14 +257,14 @@ pub fn deintOneField(
 /// Returns min(|a - b|, |a - c|, |a - (b+c+1)/2|). Used by `deinterlace`
 /// and matches the DEINTERLACE_ASM_1 / DEINTERLACE_ASM_2 macros from the
 /// Avisynth original.
-inline fn ivKernel(a: u8, b: u8, c: u8) u8 {
+inline fn ivKernel(comptime T: type, a: T, b: T, c: T) T {
     return @min(@min(scalar.absDiff(a, b), scalar.absDiff(a, c)), scalar.absDiff(a, scalar.pavgb(b, c)));
 }
 
 /// SIMD version of `ivKernel`. Returns the per-lane minimum of |a-b|,
-/// |a-c| and |a - scalar.pavgb(b, c)| — the deinterlacer's interlace-evidence
+/// |a-c| and |a - pavgb(b, c)| — the deinterlacer's interlace-evidence
 /// metric, computed in parallel over `N` pixels.
-inline fn ivKernelVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c: @Vector(N, u8)) @Vector(N, u8) {
+inline fn ivKernelVec(comptime N: usize, a: anytype, b: @TypeOf(a), c: @TypeOf(a)) @TypeOf(a) {
     const ab = simd.absDiff(N, a, b);
     const ac = simd.absDiff(N, a, c);
     const bc = simd.pavgb(N, b, c);
@@ -277,13 +276,15 @@ inline fn ivKernelVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c
 /// the deinterlacer's per-pixel scalar kernel reads from. Built once per
 /// outer (y) iteration so the inner loop can pass them in one struct each
 /// for luma, U and V.
-const Iv5Rows = struct {
-    t: [*]const u8, // y - 1 (top, from current frame)
-    c: [*]const u8, // y     (center, from current frame)
-    b: [*]const u8, // y + 1 (bottom, from current frame)
-    p: [*]const u8, // y     (prev frame)
-    n: [*]const u8, // y     (next frame)
-};
+fn Iv5Rows(comptime T: type) type {
+    return struct {
+        t: [*]const T, // y - 1 (top, from current frame)
+        c: [*]const T, // y     (center, from current frame)
+        b: [*]const T, // y + 1 (bottom, from current frame)
+        p: [*]const T, // y     (prev frame)
+        n: [*]const T, // y     (next frame)
+    };
+}
 
 /// Per-pixel scalar deinterlacer kernel. Computes the 5 IV scores
 /// (C / P / N / avg(C,P) / avg(C,N)) for luma and chroma, picks the
@@ -301,58 +302,62 @@ const Iv5Rows = struct {
 /// away the chroma IV math when `write_chroma=false` — it will change the
 /// luma output. `write_chroma` only gates the chroma WRITE, not the SCORE.
 inline fn deinterlacePixelScalar(
+    comptime T: type,
+    comptime bits: u8,
     comptime write_luma: bool,
     comptime write_chroma: bool,
     x: usize,
-    y_rows: Iv5Rows,
-    u_rows: Iv5Rows,
-    v_rows: Iv5Rows,
+    y_rows: Iv5Rows(T),
+    u_rows: Iv5Rows(T),
+    v_rows: Iv5Rows(T),
     pmMT: []const u8,
     pmMB: []const u8,
-    pD: [*]u8,
-    pD_U: [*]u8,
-    pD_V: [*]u8,
+    pD: [*]T,
+    pD_U: [*]T,
+    pD_V: [*]T,
 ) void {
     const xh = x >> 1;
+    const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const iv_th: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
 
     // Luma IV scores: C / P / N / avg(C,P) / avg(C,N) all against (T, B).
-    const ivc_l = ivKernel(y_rows.c[x], y_rows.t[x], y_rows.b[x]);
-    const ivp_l = ivKernel(y_rows.p[x], y_rows.t[x], y_rows.b[x]);
-    const ivn_l = ivKernel(y_rows.n[x], y_rows.t[x], y_rows.b[x]);
-    const ivcp_l = ivKernel(scalar.pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
-    const ivcn_l = ivKernel(scalar.pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
+    const ivc_l = ivKernel(T, y_rows.c[x], y_rows.t[x], y_rows.b[x]);
+    const ivp_l = ivKernel(T, y_rows.p[x], y_rows.t[x], y_rows.b[x]);
+    const ivn_l = ivKernel(T, y_rows.n[x], y_rows.t[x], y_rows.b[x]);
+    const ivcp_l = ivKernel(T, scalar.pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
+    const ivcn_l = ivKernel(T, scalar.pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
 
     // Chroma U IV scores.
-    const ivc_u = ivKernel(u_rows.c[xh], u_rows.t[xh], u_rows.b[xh]);
-    const ivp_u = ivKernel(u_rows.p[xh], u_rows.t[xh], u_rows.b[xh]);
-    const ivn_u = ivKernel(u_rows.n[xh], u_rows.t[xh], u_rows.b[xh]);
-    const ivcp_u = ivKernel(scalar.pavgb(u_rows.c[xh], u_rows.p[xh]), u_rows.t[xh], u_rows.b[xh]);
-    const ivcn_u = ivKernel(scalar.pavgb(u_rows.c[xh], u_rows.n[xh]), u_rows.t[xh], u_rows.b[xh]);
+    const ivc_u = ivKernel(T, u_rows.c[xh], u_rows.t[xh], u_rows.b[xh]);
+    const ivp_u = ivKernel(T, u_rows.p[xh], u_rows.t[xh], u_rows.b[xh]);
+    const ivn_u = ivKernel(T, u_rows.n[xh], u_rows.t[xh], u_rows.b[xh]);
+    const ivcp_u = ivKernel(T, scalar.pavgb(u_rows.c[xh], u_rows.p[xh]), u_rows.t[xh], u_rows.b[xh]);
+    const ivcn_u = ivKernel(T, scalar.pavgb(u_rows.c[xh], u_rows.n[xh]), u_rows.t[xh], u_rows.b[xh]);
 
     // Chroma V IV scores.
-    const ivc_v = ivKernel(v_rows.c[xh], v_rows.t[xh], v_rows.b[xh]);
-    const ivp_v = ivKernel(v_rows.p[xh], v_rows.t[xh], v_rows.b[xh]);
-    const ivn_v = ivKernel(v_rows.n[xh], v_rows.t[xh], v_rows.b[xh]);
-    const ivcp_v = ivKernel(scalar.pavgb(v_rows.c[xh], v_rows.p[xh]), v_rows.t[xh], v_rows.b[xh]);
-    const ivcn_v = ivKernel(scalar.pavgb(v_rows.c[xh], v_rows.n[xh]), v_rows.t[xh], v_rows.b[xh]);
+    const ivc_v = ivKernel(T, v_rows.c[xh], v_rows.t[xh], v_rows.b[xh]);
+    const ivp_v = ivKernel(T, v_rows.p[xh], v_rows.t[xh], v_rows.b[xh]);
+    const ivn_v = ivKernel(T, v_rows.n[xh], v_rows.t[xh], v_rows.b[xh]);
+    const ivcp_v = ivKernel(T, scalar.pavgb(v_rows.c[xh], v_rows.p[xh]), v_rows.t[xh], v_rows.b[xh]);
+    const ivcn_v = ivKernel(T, scalar.pavgb(v_rows.c[xh], v_rows.n[xh]), v_rows.t[xh], v_rows.b[xh]);
 
     // Combine: max(U, V) chroma, then max with luma → unified score per
     // candidate that drives both the luma and chroma pick.
-    const ivc: u8 = @max(ivc_l, @max(ivc_u, ivc_v));
-    var ivp: u8 = @max(ivp_l, @max(ivp_u, ivp_v));
-    var ivn: u8 = @max(ivn_l, @max(ivn_u, ivn_v));
-    const ivcp: u8 = @max(ivcp_l, @max(ivcp_u, ivcp_v));
-    const ivcn: u8 = @max(ivcn_l, @max(ivcn_u, ivcn_v));
+    const ivc: T = @max(ivc_l, @max(ivc_u, ivc_v));
+    var ivp: T = @max(ivp_l, @max(ivp_u, ivp_v));
+    var ivn: T = @max(ivn_l, @max(ivn_u, ivn_v));
+    const ivcp: T = @max(ivcp_l, @max(ivcp_u, ivcp_v));
+    const ivcn: T = @max(ivcn_l, @max(ivcn_u, ivcn_v));
 
-    const pix_c: u8 = y_rows.c[x];
-    var pix_p: u8 = y_rows.p[x];
-    var pix_n: u8 = y_rows.n[x];
-    const pix_c_u: u8 = u_rows.c[xh];
-    var pix_p_u: u8 = u_rows.p[xh];
-    var pix_n_u: u8 = u_rows.n[xh];
-    const pix_c_v: u8 = v_rows.c[xh];
-    var pix_p_v: u8 = v_rows.p[xh];
-    var pix_n_v: u8 = v_rows.n[xh];
+    const pix_c: T = y_rows.c[x];
+    var pix_p: T = y_rows.p[x];
+    var pix_n: T = y_rows.n[x];
+    const pix_c_u: T = u_rows.c[xh];
+    var pix_p_u: T = u_rows.p[xh];
+    var pix_n_u: T = u_rows.n[xh];
+    const pix_c_v: T = v_rows.c[xh];
+    var pix_p_v: T = v_rows.p[xh];
+    var pix_n_v: T = v_rows.n[xh];
 
     // CP/CN substitution: when averaged with C gives a lower score, use it.
     if (ivcp < ivp) {
@@ -369,10 +374,10 @@ inline fn deinterlacePixelScalar(
     }
 
     // Pick the lowest-iv candidate. Tie-breaks match upstream exactly.
-    var iv: u8 = 0;
-    var pick_y: u8 = undefined;
-    var pick_u: u8 = undefined;
-    var pick_v: u8 = undefined;
+    var iv: T = 0;
+    var pick_y: T = undefined;
+    var pick_u: T = undefined;
+    var pick_v: T = undefined;
     if (ivn < ivp) {
         if (ivc < ivn) {
             pick_y = pix_c;
@@ -401,10 +406,10 @@ inline fn deinterlacePixelScalar(
 
     // Motion-gated override: at sufficiently high IV with high motion,
     // fall back to the vertical luma average and `pB` for chroma.
-    const draw = iv > 8 and (pmMT[x] > 12 or pmMB[x] > 12);
+    const draw = iv > iv_th and (pmMT[x] > 12 or pmMB[x] > 12);
     if (write_luma) {
         pD[x] = if (draw)
-            @intCast((@as(u16, y_rows.t[x]) + @as(u16, y_rows.b[x])) >> 1)
+            @intCast((@as(Wide, y_rows.t[x]) + @as(Wide, y_rows.b[x])) >> 1)
         else
             pick_y;
     }
@@ -422,22 +427,16 @@ inline fn deinterlacePixelScalar(
 ///
 /// The caller must have pre-populated `motion4di` via
 /// `makeMotionMap2Min(prev, curr, next)`.
-///
-/// Algorithm produces per-pixel:
-///   bufC[x]  = max(luma_iv(pC, pT, pB),   chroma_iv broadcast for U,V)
-///   bufP[x]  = max(luma_iv(pP, pT, pB),   chroma_iv for P U,V)
-///   bufN[x]  = max(luma_iv(pN, pT, pB),   chroma_iv for N U,V)
-///   bufCP[x] = max(luma_iv(avg(pC,pP), pT, pB), chroma_iv for avg)
-///   bufCN[x] = max(luma_iv(avg(pC,pN), pT, pB), chroma_iv for avg)
-/// then picks the smallest score's pixel.
-pub fn deinterlace(
+pub inline fn deinterlace(
+    comptime T: type,
+    comptime bits: u8,
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst: *const plane.PlaneViewMut(u8),
-    src_p: *const plane.PlaneView(u8),
-    src_c: *const plane.PlaneView(u8),
-    src_n: *const plane.PlaneView(u8),
+    dst: *const plane.PlaneViewMut(T),
+    src_p: *const plane.PlaneView(T),
+    src_c: *const plane.PlaneView(T),
+    src_n: *const plane.PlaneView(T),
 ) void {
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
@@ -445,6 +444,9 @@ pub fn deinterlace(
 
     const row_y: usize = w;
     const row_uv: usize = w / 2;
+    const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const ShiftT = std.math.Log2Int(Wide);
+    const iv_th_val: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
 
     var yy: i32 = 0;
     while (yy < height) : (yy += 2) {
@@ -473,8 +475,7 @@ pub fn deinterlace(
         const pmMT = motion4di[mT_row * w ..][0..w];
         const pmMB = motion4di[mB_row * w ..][0..w];
 
-        // Top field (y_top = yy = y^1) just gets copied straight through —
-        // upstream uses `memcpy(DYP(dst, y^1), SYP(srcC, y^1), width)`.
+        // Top field (y_top = yy = y^1) just gets copied straight through.
         const pD_top = plane.dyp(dst.y, dst.y_stride, height, 0, y ^ 1);
         const pSC_top = plane.syp(src_c.y, src_c.y_stride, height, 0, y ^ 1);
         @memcpy(pD_top[0..row_y], pSC_top[0..row_y]);
@@ -491,18 +492,16 @@ pub fn deinterlace(
         const pD_U = plane.dyp(dst.u, dst.u_stride, height, 1, y);
         const pD_V = plane.dyp(dst.v, dst.v_stride, height, 2, y);
 
-        const y_rows: Iv5Rows = .{ .t = pT, .c = pC, .b = pB, .p = pP, .n = pN };
-        const u_rows: Iv5Rows = .{ .t = pT_U, .c = pC_U, .b = pB_U, .p = pP_U, .n = pN_U };
-        const v_rows: Iv5Rows = .{ .t = pT_V, .c = pC_V, .b = pB_V, .p = pP_V, .n = pN_V };
+        const y_rows: Iv5Rows(T) = .{ .t = pT, .c = pC, .b = pB, .p = pP, .n = pN };
+        const u_rows: Iv5Rows(T) = .{ .t = pT_U, .c = pC_U, .b = pB_U, .p = pP_U, .n = pN_U };
+        const v_rows: Iv5Rows(T) = .{ .t = pT_V, .c = pC_V, .b = pB_V, .p = pP_V, .n = pN_V };
         const chroma_row = @mod(y >> 1, 2) != 0;
 
-        // SIMD body for luma: process LL pixels per iter. Chroma is kept
-        // scalar (run in the same x-loop) because the upstream "last write
-        // wins" pattern across pair-of-luma needs awkward mask sub-sampling
-        // to replicate in SIMD; the chroma is half the data anyway.
-        const LL = 32;
+        // SIMD body for luma: 256-bit width = 32 u8 lanes / 16 u16 lanes per
+        // luma block, chroma half.
+        const LL: usize = 32 / @sizeOf(T);
         const LC = LL / 2;
-        const ivk_th: @Vector(LL, u8) = @splat(8);
+        const ivk_th: @Vector(LL, T) = @splat(iv_th_val);
         const motion_th: @Vector(LL, u8) = @splat(12);
         var xx: usize = 0;
         while (xx + LL <= w) : (xx += LL) {
@@ -522,7 +521,7 @@ pub fn deinterlace(
             const ivcp_l_v = ivKernelVec(LL, cp_v, v_t, v_b);
             const ivcn_l_v = ivKernelVec(LL, cn_v, v_t, v_b);
 
-            // Chroma scores: process LC chroma bytes for each plane
+            // Chroma scores: process LC chroma samples for each plane
             const xhh = xx >> 1;
             const u_t = simd.load(LC, pT_U, xhh);
             const u_c = simd.load(LC, pC_U, xhh);
@@ -577,32 +576,29 @@ pub fn deinterlace(
 
             // CP / CN substitution: if averaged variant has lower iv, use it
             const use_cp: @Vector(LL, bool) = ivcp_v_ < ivp_v_;
-            pix_p_v = @select(u8, use_cp, cp_v, pix_p_v);
-            ivp_v_ = @select(u8, use_cp, ivcp_v_, ivp_v_);
+            pix_p_v = @select(T, use_cp, cp_v, pix_p_v);
+            ivp_v_ = @select(T, use_cp, ivcp_v_, ivp_v_);
             const use_cn: @Vector(LL, bool) = ivcn_v_ < ivn_v_;
-            pix_n_v = @select(u8, use_cn, cn_v, pix_n_v);
-            ivn_v_ = @select(u8, use_cn, ivcn_v_, ivn_v_);
+            pix_n_v = @select(T, use_cn, cn_v, pix_n_v);
+            ivn_v_ = @select(T, use_cn, ivcn_v_, ivn_v_);
 
             // Pick min(ivc, ivp, ivn) with the original tie-break semantics
             const n_lt_p: @Vector(LL, bool) = ivn_v_ < ivp_v_;
-            const pix_np = @select(u8, n_lt_p, pix_n_v, pix_p_v);
-            const iv_np = @select(u8, n_lt_p, ivn_v_, ivp_v_);
+            const pix_np = @select(T, n_lt_p, pix_n_v, pix_p_v);
+            const iv_np = @select(T, n_lt_p, ivn_v_, ivp_v_);
             const c_wins: @Vector(LL, bool) = ivc_v < iv_np;
-            const result_no_motion = @select(u8, c_wins, v_c, pix_np);
-            const final_iv = @select(u8, c_wins, ivc_v, iv_np);
+            const result_no_motion = @select(T, c_wins, v_c, pix_np);
+            const final_iv = @select(T, c_wins, ivc_v, iv_np);
 
-            // Motion-gated vertical-average override. `vavg` is the truncated
-            // (t+b)>>1, matching deinterlacePixelScalar and the Avisynth C
-            // upstream. Rounded pavgb would differ by 1 LSB at pixels where
-            // (pT[x]+pB[x]) is odd and would not match the scalar tail of
-            // the same row.
+            // Motion-gated vertical-average override. Truncated (t+b)>>1
+            // (matches Avisynth C upstream + scalar tail).
             const mt_v = simd.load(LL, pmMT.ptr, xx);
             const mb_v = simd.load(LL, pmMB.ptr, xx);
             const motion_high: @Vector(LL, bool) = (mt_v > motion_th) | (mb_v > motion_th);
             const iv_high: @Vector(LL, bool) = final_iv > ivk_th;
             const draw_mask = iv_high & motion_high;
-            const vavg: @Vector(LL, u8) = @intCast((@as(@Vector(LL, u16), v_t) + @as(@Vector(LL, u16), v_b)) >> @as(@Vector(LL, u4), @splat(1)));
-            const result = @select(u8, draw_mask, vavg, result_no_motion);
+            const vavg: @Vector(LL, T) = @intCast((@as(@Vector(LL, Wide), v_t) + @as(@Vector(LL, Wide), v_b)) >> @as(@Vector(LL, ShiftT), @splat(1)));
+            const result = @select(T, draw_mask, vavg, result_no_motion);
             simd.store(LL, pD, xx, result);
 
             // Chroma writes: scalar to preserve upstream's "last write of
@@ -611,23 +607,21 @@ pub fn deinterlace(
             if (chroma_row) {
                 var xc = xx;
                 while (xc < xx + LL) : (xc += 1) {
-                    deinterlacePixelScalar(false, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
+                    deinterlacePixelScalar(T, bits, false, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
                 }
             }
         }
 
-        // Scalar tail. Pick the per-row chroma mode via comptime branching
-        // so the helper specialises into two tight no-chroma / with-chroma
-        // bodies — comparable to the original separate-paths layout.
+        // Scalar tail.
         if (chroma_row) {
             var x: usize = xx;
             while (x < w) : (x += 1) {
-                deinterlacePixelScalar(true, true, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
+                deinterlacePixelScalar(T, bits, true, true, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
             }
         } else {
             var x: usize = xx;
             while (x < w) : (x += 1) {
-                deinterlacePixelScalar(true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
+                deinterlacePixelScalar(T, bits, true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
             }
         }
     }
@@ -640,20 +634,24 @@ pub fn deinterlace(
 /// Ported from `reference/avisynth/src/di.cpp::SimpleBlur_YV12`. The caller
 /// is responsible for having pre-populated `motion4di` via
 /// `makeSimpleBlurMap`.
-pub fn simpleBlur(
+pub inline fn simpleBlur(
+    comptime T: type,
+    comptime bits: u8,
     width: i32,
     height: i32,
     motion4di: []const u8,
-    dst: *const plane.PlaneViewMut(u8),
-    src: *const plane.PlaneView(u8),
-    ref: *const plane.PlaneView(u8),
+    dst: *const plane.PlaneViewMut(T),
+    src: *const plane.PlaneView(T),
+    ref: *const plane.PlaneView(T),
 ) void {
+    _ = bits;
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
     std.debug.assert(motion4di.len == w * h);
+    const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const ShiftT = std.math.Log2Int(Wide);
 
-    // Pass 1: count motion-tagged pixels to decide if we should blur every
-    // pixel (when motion is widespread enough that selectivity hurts).
+    // Pass 1: count motion-tagged pixels in the u8 map. Threshold 4 stays.
     var motion_hits: usize = 0;
     {
         const LANES = 32;
@@ -680,9 +678,6 @@ pub fn simpleBlur(
     // Pass 2: blur or copy per pixel.
     var y: i32 = 0;
     while (y < height) : (y += 1) {
-        // Top/bottom rows come from one frame, center from the other; swap
-        // based on `y` parity. The full PlaneViews carry all three planes
-        // so the pT/pC/pB triples below stay one expression each.
         const tb = if (@rem(y, 2) != 0) src else ref;
         const ce = if (@rem(y, 2) != 0) ref else src;
         const pT = plane.syp(tb.y, tb.y_stride, height, 0, y - 1);
@@ -700,14 +695,8 @@ pub fn simpleBlur(
         const pD_U = plane.dyp(dst.u, dst.u_stride, height, 1, y);
         const pD_V = plane.dyp(dst.v, dst.v_stride, height, 2, y);
 
-        const SB_LANES = 16;
-        // SIMD main path: process SB_LANES consecutive luma pixels at a time.
-        // We avoid the SIMD body for x=0 and the trailing tail because the
-        // overlap-loads of pmMC[x-1] / pmMC[x+SB_LANES] need both neighbours
-        // to be in-row. Chroma writes are deferred to the scalar loop because
-        // every second luma pixel overwrites the same chroma byte (upstream
-        // quirk), and emulating that pattern in SIMD adds more complexity
-        // than the chroma savings justify.
+        // 256-bit SIMD width = 16 u8 lanes / 8 u16 lanes for the blur body.
+        const SB_LANES: usize = 16 / @sizeOf(T);
         var x: usize = 0;
         // Scalar prologue for x=0 only.
         if (w > 0) {
@@ -716,10 +705,10 @@ pub fn simpleBlur(
             const m_r: u8 = if (w > 1) pmMC[1] else 0;
             const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
             if (do_blur) {
-                pD[0] = @intCast((@as(u16, pT[0]) + @as(u16, pB[0]) + (@as(u16, pC[0]) << 1)) >> 2);
+                pD[0] = @intCast((@as(Wide, pT[0]) + @as(Wide, pB[0]) + (@as(Wide, pC[0]) << 1)) >> 2);
                 if (@mod(y >> 1, 2) != 0) {
-                    pD_U[0] = @intCast((@as(u16, pT_U[0]) + @as(u16, pB_U[0]) + (@as(u16, pC_U[0]) << 1)) >> 2);
-                    pD_V[0] = @intCast((@as(u16, pT_V[0]) + @as(u16, pB_V[0]) + (@as(u16, pC_V[0]) << 1)) >> 2);
+                    pD_U[0] = @intCast((@as(Wide, pT_U[0]) + @as(Wide, pB_U[0]) + (@as(Wide, pC_U[0]) << 1)) >> 2);
+                    pD_V[0] = @intCast((@as(Wide, pT_V[0]) + @as(Wide, pB_V[0]) + (@as(Wide, pC_V[0]) << 1)) >> 2);
                 }
             } else {
                 pD[0] = pC[0];
@@ -731,7 +720,6 @@ pub fn simpleBlur(
             x = 1;
         }
         // SIMD body — bounds: m_l reads from x-1, m_r reads up to x+SB_LANES.
-        // Both must stay within [0, w-1], so we need 1 <= x and x+SB_LANES <= w-1.
         const sb_th: @Vector(SB_LANES, u8) = @splat(12);
         while (x + SB_LANES + 1 <= w) : (x += SB_LANES) {
             const m_l = simd.load(SB_LANES, pmMC.ptr, x - 1);
@@ -745,14 +733,14 @@ pub fn simpleBlur(
             const c = simd.load(SB_LANES, pC, x);
             const t = simd.load(SB_LANES, pT, x);
             const b = simd.load(SB_LANES, pB, x);
-            const c16: @Vector(SB_LANES, u16) = c;
-            const t16: @Vector(SB_LANES, u16) = t;
-            const b16: @Vector(SB_LANES, u16) = b;
-            const blur_u16 = (t16 + b16 + (c16 << @as(@Vector(SB_LANES, u4), @splat(1)))) >>
-                @as(@Vector(SB_LANES, u4), @splat(2));
-            const blur: @Vector(SB_LANES, u8) = @intCast(blur_u16);
+            const c_w: @Vector(SB_LANES, Wide) = c;
+            const t_w: @Vector(SB_LANES, Wide) = t;
+            const b_w: @Vector(SB_LANES, Wide) = b;
+            const blur_w = (t_w + b_w + (c_w << @as(@Vector(SB_LANES, ShiftT), @splat(1)))) >>
+                @as(@Vector(SB_LANES, ShiftT), @splat(2));
+            const blur: @Vector(SB_LANES, T) = @intCast(blur_w);
 
-            const result = @select(u8, blur_mask, blur, c);
+            const result = @select(T, blur_mask, blur, c);
             simd.store(SB_LANES, pD, x, result);
 
             // Chroma: re-run scalar for the corresponding pair-of-luma indices
@@ -767,8 +755,8 @@ pub fn simpleBlur(
                     const do_blur_c = all_pixel or ml > 12 or mc > 12 or mr > 12;
                     const xh = xc >> 1;
                     if (do_blur_c) {
-                        pD_U[xh] = @intCast((@as(u16, pT_U[xh]) + @as(u16, pB_U[xh]) + (@as(u16, pC_U[xh]) << 1)) >> 2);
-                        pD_V[xh] = @intCast((@as(u16, pT_V[xh]) + @as(u16, pB_V[xh]) + (@as(u16, pC_V[xh]) << 1)) >> 2);
+                        pD_U[xh] = @intCast((@as(Wide, pT_U[xh]) + @as(Wide, pB_U[xh]) + (@as(Wide, pC_U[xh]) << 1)) >> 2);
+                        pD_V[xh] = @intCast((@as(Wide, pT_V[xh]) + @as(Wide, pB_V[xh]) + (@as(Wide, pC_V[xh]) << 1)) >> 2);
                     } else {
                         pD_U[xh] = pC_U[xh];
                         pD_V[xh] = pC_V[xh];
@@ -783,11 +771,11 @@ pub fn simpleBlur(
             const m_r: u8 = if (x + 1 < w) pmMC[x + 1] else 0;
             const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
             if (do_blur) {
-                pD[x] = @intCast((@as(u16, pT[x]) + @as(u16, pB[x]) + (@as(u16, pC[x]) << 1)) >> 2);
+                pD[x] = @intCast((@as(Wide, pT[x]) + @as(Wide, pB[x]) + (@as(Wide, pC[x]) << 1)) >> 2);
                 if (@mod(y >> 1, 2) != 0) {
                     const xh = x >> 1;
-                    pD_U[xh] = @intCast((@as(u16, pT_U[xh]) + @as(u16, pB_U[xh]) + (@as(u16, pC_U[xh]) << 1)) >> 2);
-                    pD_V[xh] = @intCast((@as(u16, pT_V[xh]) + @as(u16, pB_V[xh]) + (@as(u16, pC_V[xh]) << 1)) >> 2);
+                    pD_U[xh] = @intCast((@as(Wide, pT_U[xh]) + @as(Wide, pB_U[xh]) + (@as(Wide, pC_U[xh]) << 1)) >> 2);
+                    pD_V[xh] = @intCast((@as(Wide, pT_V[xh]) + @as(Wide, pB_V[xh]) + (@as(Wide, pC_V[xh]) << 1)) >> 2);
                 }
             } else {
                 pD[x] = pC[x];
@@ -830,12 +818,9 @@ test "copyCPNField: identical src and ref produce identical output" {
 
     const dst: plane.PlaneViewMut(u8) = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
     const view: plane.PlaneView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
-    copyCPNField(width, height, &dst, &view, &view);
+    copyCPNField(u8, 8, width, height, &dst, &view, &view);
 
-    // Y plane must equal src
     try std.testing.expectEqualSlices(u8, yp, dy);
-    // U/V might only have chroma-rows where (yy/2)%2 == 1, others = 0
-    // Verify rows 2-3 of chroma got copied (yy=4 -> chroma row 2-3)
     try std.testing.expectEqual(@as(u8, 100), du[2 * (w / 2) + 0]);
     try std.testing.expectEqual(@as(u8, 200), dv[2 * (w / 2) + 0]);
 }
@@ -876,12 +861,10 @@ test "copyCPNField: bottom row uses ref, top row uses src" {
     const dst: plane.PlaneViewMut(u8) = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
     const src: plane.PlaneView(u8) = .{ .y = sy.ptr, .y_stride = w, .u = sub.ptr, .u_stride = w / 2, .v = svb.ptr, .v_stride = w / 2 };
     const ref: plane.PlaneView(u8) = .{ .y = ry.ptr, .y_stride = w, .u = rub.ptr, .u_stride = w / 2, .v = rvb.ptr, .v_stride = w / 2 };
-    copyCPNField(width, height, &dst, &src, &ref);
+    copyCPNField(u8, 8, width, height, &dst, &src, &ref);
 
-    // Even rows (top fields) come from src (0xAA)
     try std.testing.expectEqual(@as(u8, 0xAA), dy[0 * w + 0]);
     try std.testing.expectEqual(@as(u8, 0xAA), dy[2 * w + 0]);
-    // Odd rows (bottom fields) come from ref (0xBB)
     try std.testing.expectEqual(@as(u8, 0xBB), dy[1 * w + 0]);
     try std.testing.expectEqual(@as(u8, 0xBB), dy[3 * w + 0]);
 }

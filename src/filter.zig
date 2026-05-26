@@ -683,7 +683,7 @@ fn ensureMotionMap(inst: *Filter, zapi: *const ZAPI, n_in: i32) void {
     const vP = viewOf(zapi, srcP.?);
     const vC = viewOf(zapi, srcC.?);
 
-    const stats = motion_mod.makeMotionMap(inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
+    const stats = motion_mod.makeMotionMap(u8, 8, inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     inst.frame_info[@intCast(n)].diffP0 = stats.diffP0;
     inst.frame_info[@intCast(n)].diffP1 = stats.diffP1;
     inst.frame_info[@intCast(n)].diffS0 = stats.diffS0;
@@ -747,10 +747,10 @@ fn deinterlaceInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) voi
     const vC = viewOf(zapi, srcC.?);
     const vN = viewOf(zapi, srcN.?);
 
-    motion_mod.makeMotionMap2Min(inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
+    motion_mod.makeMotionMap2Min(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
 
     const vD = viewOfMut(zapi, dst);
-    output_mod.deinterlace(inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
+    output_mod.deinterlace(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
 }
 
 /// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds
@@ -780,10 +780,10 @@ fn simpleBlurInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void
     }
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
-    motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
+    motion_mod.makeSimpleBlurMap(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     const vD = viewOfMut(zapi, dst);
-    output_mod.simpleBlur(inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vC, &vR);
+    output_mod.simpleBlur(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vC, &vR);
 }
 
 fn copyCpnInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
@@ -810,7 +810,7 @@ fn copyCpnInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     const vD = viewOfMut(zapi, dst);
-    output_mod.copyCPNField(inst.width, inst.height, &vD, &vC, &vR);
+    output_mod.copyCPNField(u8, 8, inst.width, inst.height, &vD, &vC, &vR);
 }
 
 fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
@@ -838,7 +838,7 @@ fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     // MakeSimpleBlurMap_YV12 -> motionMap4DI
-    motion_mod.makeSimpleBlurMap(inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
+    motion_mod.makeSimpleBlurMap(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     // MakeMotionMap2Max_YV12 -> motionMap4DIMax
     const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
@@ -847,14 +847,14 @@ fn deintInto(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     defer zapi.freeFrame(srcN);
     const vP = viewOf(zapi, srcP.?);
     const vN = viewOf(zapi, srcN.?);
-    motion_mod.makeMotionMap2Max(inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
+    motion_mod.makeMotionMap2Max(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
     // during output). Reuse it to avoid an extra allocation, matching the
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
     const vD = viewOfMut(zapi, dst);
-    output_mod.deintOneField(inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
+    output_mod.deintOneField(u8, 8, inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
 }
 
 fn drawPrevFrame(inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {

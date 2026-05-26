@@ -18,6 +18,50 @@ pub const MAX_WIDTH = 8192;
 /// `motion.zig`. Luma packs at 2× (32 lanes) since YV12 chroma is half-rate.
 pub const CHROMA_LANES = 16;
 
+/// Chroma subsampling layout. The IT algorithm was designed for YV12
+/// (4:2:0); we extend it to 4:4:4 by routing all chroma rate/index
+/// expressions through a comptime tag.
+pub const ChromaSampling = enum {
+    yuv420, // subSamplingW=1, subSamplingH=1
+    yuv444, // subSamplingW=0, subSamplingH=0
+};
+
+/// Chroma row count for a luma-pixel row count, given the sampling.
+pub inline fn chromaHeight(comptime cs: ChromaSampling, height: i32) i32 {
+    return switch (cs) {
+        .yuv420 => height >> 1,
+        .yuv444 => height,
+    };
+}
+
+/// Chroma sample count per luma row, given the sampling.
+pub inline fn chromaWidth(comptime cs: ChromaSampling, width: i32) i32 {
+    return switch (cs) {
+        .yuv420 => width >> 1,
+        .yuv444 => width,
+    };
+}
+
+/// Map a luma column index to the chroma column index for the same pixel.
+/// In 4:2:0 two adjacent luma pixels share one chroma sample; in 4:4:4 each
+/// luma pixel has its own.
+pub inline fn chromaCol(comptime cs: ChromaSampling, x: usize) usize {
+    return switch (cs) {
+        .yuv420 => x >> 1,
+        .yuv444 => x,
+    };
+}
+
+/// SIMD chroma lane count per `luma_lanes`, given the sampling. For 4:2:0
+/// the chroma vector is half the luma vector (half-rate); for 4:4:4 it
+/// matches the luma vector.
+pub inline fn chromaLanesOf(comptime cs: ChromaSampling, comptime luma_lanes: usize) usize {
+    return switch (cs) {
+        .yuv420 => luma_lanes / 2,
+        .yuv444 => luma_lanes,
+    };
+}
+
 /// Read-only view of one frame's Y/U/V plane base pointers + strides.
 /// Used by `filter.zig` to pass extracted plane geometry into the algorithm
 /// modules in one struct instead of six separate parameters per frame.
@@ -79,20 +123,14 @@ pub fn clipYH(y: i32, height: i32) i32 {
 /// returns a pointer starting at the correct sample offset.
 ///
 /// `plane == 0` (luma): one pointer per actual scan line.
-/// `plane != 0` (chroma): upstream re-maps to `((y >> 2) << 1) + (y % 2)`,
-///   i.e. four luma lines share two chroma rows (because of YV12 vertical
-///   sub-sampling) AND chroma top/bottom fields are interleaved. The result
-///   may look strange but it's exactly what upstream produces — and our
-///   golden-frame oracle uses the same formula.
+/// `plane != 0` (chroma): YV12 mapping `((y >> 2) << 1) + (y % 2)` —
+///   four luma lines share two chroma rows AND chroma top/bottom fields
+///   are interleaved. Bit-for-bit upstream behaviour for 4:2:0.
 ///
-/// The `plane` argument is u32 for upstream-index parity (0=Y, 1=U, 2=V),
-/// but internally only `plane == 0` vs `plane != 0` matters — U vs V is
-/// distinguished entirely by the `base`/`stride` arguments. Callers MUST
-/// pass the right base/stride for the plane they intend.
+/// 4:4:4 callers must use `sypChroma(.yuv444, ...)` for chroma; calling
+/// `syp` with `plane != 0` always applies the YV12 mapping.
 ///
-/// Generic via `anytype` on `base` — element type is inferred from the
-/// pointer, return type matches. `stride` is in SAMPLES (T-elements) per
-/// row, not bytes.
+/// `stride` is in SAMPLES per row, not bytes.
 pub fn syp(
     base: anytype,
     stride: usize,
@@ -109,8 +147,7 @@ pub fn syp(
 }
 
 /// Destination y-pointer (mutable counterpart to `syp`). Same plane-index
-/// semantics — only `plane == 0` vs `plane != 0` is examined; U vs V is
-/// distinguished by `base`/`stride`.
+/// semantics — only `plane == 0` vs `plane != 0` is examined.
 pub fn dyp(
     base: anytype,
     stride: usize,
@@ -123,6 +160,41 @@ pub fn dyp(
         @intCast(yi)
     else
         @intCast(((yi >> 2) << 1) + @rem(yi, 2));
+    return base + row * stride;
+}
+
+/// Subsampling-aware source y-pointer for chroma planes. For 4:2:0 falls
+/// back to the YV12 field-interleaved mapping; for 4:4:4 chroma rows
+/// match luma rows 1-to-1. Use this from chroma-aware kernels that need
+/// to support both samplings.
+pub fn sypChroma(
+    comptime cs: ChromaSampling,
+    base: anytype,
+    stride: usize,
+    height: i32,
+    y: i32,
+) @TypeOf(base) {
+    const yi = clipY(y, height);
+    const row: usize = switch (cs) {
+        .yuv420 => @intCast(((yi >> 2) << 1) + @rem(yi, 2)),
+        .yuv444 => @intCast(yi),
+    };
+    return base + row * stride;
+}
+
+/// Mutable counterpart to `sypChroma`.
+pub fn dypChroma(
+    comptime cs: ChromaSampling,
+    base: anytype,
+    stride: usize,
+    height: i32,
+    y: i32,
+) @TypeOf(base) {
+    const yi = clipY(y, height);
+    const row: usize = switch (cs) {
+        .yuv420 => @intCast(((yi >> 2) << 1) + @rem(yi, 2)),
+        .yuv444 => @intCast(yi),
+    };
     return base + row * stride;
 }
 
@@ -163,7 +235,7 @@ test "syp luma is just y * stride" {
     try std.testing.expectEqual(@as(u8, 0xAA), ptr[10]);
 }
 
-test "syp chroma uses ((y>>2)<<1)+(y%2) mapping" {
+test "syp chroma uses ((y>>2)<<1)+(y%2) mapping for 4:2:0" {
     // For y=4 in chroma: ((4>>2)<<1) + (4%2) = 2 + 0 = row 2
     // For y=5 in chroma: ((5>>2)<<1) + (5%2) = 2 + 1 = row 3
     // For y=7 in chroma: ((7>>2)<<1) + (7%2) = 2 + 1 = row 3
@@ -177,4 +249,21 @@ test "syp chroma uses ((y>>2)<<1)+(y%2) mapping" {
     try std.testing.expectEqual(@as(u8, 0x22), syp(ptr, 360, 480, 1, 5)[0]);
     try std.testing.expectEqual(@as(u8, 0x22), syp(ptr, 360, 480, 1, 7)[0]);
     try std.testing.expectEqual(@as(u8, 0x33), syp(ptr, 360, 480, 1, 8)[0]);
+}
+
+test "sypChroma 4:2:0 matches syp(plane!=0)" {
+    var buf = [_]u8{0} ** (240 * 360);
+    buf[2 * 360 + 0] = 0x11;
+    buf[3 * 360 + 0] = 0x22;
+    const ptr: [*]const u8 = &buf;
+    try std.testing.expectEqual(@as(u8, 0x11), sypChroma(.yuv420, ptr, 360, 480, 4)[0]);
+    try std.testing.expectEqual(@as(u8, 0x22), sypChroma(.yuv420, ptr, 360, 480, 5)[0]);
+}
+
+test "sypChroma 4:4:4 maps row 1-to-1 with luma" {
+    var buf = [_]u8{0} ** (480 * 720);
+    buf[5 * 720 + 10] = 0xCC;
+    const ptr: [*]const u8 = &buf;
+    // 4:4:4: chroma row = luma row, no interleave.
+    try std.testing.expectEqual(@as(u8, 0xCC), sypChroma(.yuv444, ptr, 720, 480, 5)[10]);
 }

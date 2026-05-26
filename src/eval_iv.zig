@@ -5,6 +5,11 @@
 //!
 //! The caller must have already filled the edge map for `ref` via
 //! `makeDeMap(width, height, offset=1, ...)`.
+//!
+//! Generic over the pixel storage type `T` (u8/u16) and bit-depth `bits`.
+//! Pixel-diff math runs at T precision; before subtracting the (u8) edge
+//! map the diff is downscaled to u8 via `scalar.toMapByte` /
+//! `simd.toMapByteVec`. The IV thresholds (40, 6) stay 8-bit-calibrated.
 
 const std = @import("std");
 const plane = @import("plane.zig");
@@ -14,7 +19,7 @@ const scalar = @import("scalar.zig");
 
 /// min(|a-b|, |a-c|, |a - (b+c+1)/2|) — the inner "evaluate-interlace"
 /// kernel from upstream's `eval_iv_asm`.
-inline fn evalIvAsm(eax: [*]const u8, ebx: [*]const u8, ecx: [*]const u8, i: usize) u8 {
+inline fn evalIvAsm(comptime T: type, eax: [*]const T, ebx: [*]const T, ecx: [*]const T, i: usize) T {
     const a = eax[i];
     const b = ebx[i];
     const c = ecx[i];
@@ -22,7 +27,7 @@ inline fn evalIvAsm(eax: [*]const u8, ebx: [*]const u8, ecx: [*]const u8, i: usi
 }
 
 /// SIMD eval-iv kernel for N lanes: min(|a-b|, |a-c|, |a - pavgb(b,c)|).
-inline fn evalIvVec(comptime N: usize, a: @Vector(N, u8), b: @Vector(N, u8), c: @Vector(N, u8)) @Vector(N, u8) {
+inline fn evalIvVec(comptime N: usize, a: anytype, b: @TypeOf(a), c: @TypeOf(a)) @TypeOf(a) {
     const ab = simd.absDiff(N, a, b);
     const ac = simd.absDiff(N, a, c);
     const a_bc = simd.absDiff(N, a, simd.pavgb(N, b, c));
@@ -48,26 +53,28 @@ pub const EvalResult = struct {
 ///
 /// The function caps `counter` at `pthreshold` and bails early once it
 /// crosses, matching upstream's optimisation.
-pub fn evalIv(
+pub inline fn evalIv(
+    comptime T: type,
+    comptime bits: u8,
     width: i32,
     height: i32,
     pthreshold: i32,
     edge_map: []u8,
-    src_y: [*]const u8,
+    src_y: [*]const T,
     src_y_stride: usize,
-    src_u: [*]const u8,
+    src_u: [*]const T,
     src_u_stride: usize,
-    src_v: [*]const u8,
+    src_v: [*]const T,
     src_v_stride: usize,
-    ref_y: [*]const u8,
+    ref_y: [*]const T,
     ref_y_stride: usize,
-    ref_u: [*]const u8,
+    ref_u: [*]const T,
     ref_u_stride: usize,
-    ref_v: [*]const u8,
+    ref_v: [*]const T,
     ref_v_stride: usize,
 ) EvalResult {
     // Refresh the odd rows of the edge map from `ref`.
-    edge_mod.makeDeMap(width, height, 1, edge_map, ref_y, ref_y_stride, ref_u, ref_u_stride, ref_v, ref_v_stride);
+    edge_mod.makeDeMap(T, bits, width, height, 1, edge_map, ref_y, ref_y_stride, ref_u, ref_u_stride, ref_v, ref_v_stride);
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == edge_map.len);
     const w: usize = @intCast(width);
     const th: u8 = 40;
@@ -100,21 +107,23 @@ pub fn evalIv(
         const peB = edge_map[eB_row * w ..][0..w];
 
         var i: usize = 16;
-        const LANES = 16; // chroma; luma uses 32
+        // SIMD lane count: keep 256-bit width per chroma block, 512-bit-ish for
+        // luma (= 2x chroma). At u8 that's 16 / 32; at u16, 8 / 16.
+        const LANES: usize = 16 / @sizeOf(T);
 
         // SIMD body
-        const th_v: @Vector(32, u8) = @splat(th);
-        const th2_v: @Vector(32, u8) = @splat(th2);
-        const zeros: @Vector(32, u8) = @splat(0);
-        const ones: @Vector(32, u8) = @splat(1);
+        const th_v: @Vector(LANES * 2, u8) = @splat(th);
+        const th2_v: @Vector(LANES * 2, u8) = @splat(th2);
+        const zeros: @Vector(LANES * 2, u8) = @splat(0);
+        const ones: @Vector(LANES * 2, u8) = @splat(1);
         while (i + LANES <= widthminus16) : (i += LANES) {
-            // Luma kernel over 32 contiguous bytes (covers lanes i*2..i*2+31).
-            const c_y = simd.load(32, pC, i * 2);
-            const t_y = simd.load(32, pT, i * 2);
-            const b_y = simd.load(32, pB, i * 2);
-            const yk = evalIvVec(32, c_y, t_y, b_y);
+            // Luma kernel over 2*LANES contiguous samples (covers lanes i*2..i*2+2*LANES-1).
+            const c_y = simd.load(LANES * 2, pC, i * 2);
+            const t_y = simd.load(LANES * 2, pT, i * 2);
+            const b_y = simd.load(LANES * 2, pB, i * 2);
+            const yk = evalIvVec(LANES * 2, c_y, t_y, b_y);
 
-            // Chroma kernel over 16 bytes (covers lanes i..i+15).
+            // Chroma kernel over LANES samples (covers lanes i..i+LANES-1).
             const c_u = simd.load(LANES, pC_U, i);
             const t_u = simd.load(LANES, pT_U, i);
             const b_u = simd.load(LANES, pB_U, i);
@@ -126,31 +135,35 @@ pub fn evalIv(
             const vk = evalIvVec(LANES, c_v, t_v, b_v);
 
             const uvk = @max(uk, vk);
-            var mm0 = @max(yk, simd.expandPairs(LANES, uvk));
+            const mm0_t = @max(yk, simd.expandPairs(LANES, uvk));
+            // Downscale T-precision diff to u8 for the map-subtract sequence.
+            var mm0 = simd.toMapByteVec(T, bits, LANES * 2, mm0_t);
 
-            const peC32 = simd.load(32, peC.ptr, i * 2);
-            const peT32 = simd.load(32, peT.ptr, i * 2);
-            const peB32 = simd.load(32, peB.ptr, i * 2);
+            const peC32 = simd.load(LANES * 2, peC.ptr, i * 2);
+            const peT32 = simd.load(LANES * 2, peT.ptr, i * 2);
+            const peB32 = simd.load(LANES * 2, peB.ptr, i * 2);
             const pe = @max(@max(peC32, peT32), peB32);
 
             mm0 = mm0 -| pe;
             mm0 = mm0 -| pe;
 
-            const mask1: @Vector(32, bool) = mm0 > th_v;
-            const mask2: @Vector(32, bool) = mm0 > th2_v;
-            sum += @reduce(.Add, @as(@Vector(32, u16), @select(u8, mask1, ones, zeros)));
-            sum2 += @reduce(.Add, @as(@Vector(32, u16), @select(u8, mask2, ones, zeros)));
+            const mask1: @Vector(LANES * 2, bool) = mm0 > th_v;
+            const mask2: @Vector(LANES * 2, bool) = mm0 > th2_v;
+            sum += @reduce(.Add, @as(@Vector(LANES * 2, u16), @select(u8, mask1, ones, zeros)));
+            sum2 += @reduce(.Add, @as(@Vector(LANES * 2, u16), @select(u8, mask2, ones, zeros)));
         }
         // Scalar tail
         while (i < widthminus16) : (i += 1) {
-            const yl = evalIvAsm(pC, pT, pB, i * 2);
-            const yh = evalIvAsm(pC, pT, pB, i * 2 + 1);
-            const u = evalIvAsm(pC_U, pT_U, pB_U, i);
-            const v = evalIvAsm(pC_V, pT_V, pB_V, i);
+            const yl_t = evalIvAsm(T, pC, pT, pB, i * 2);
+            const yh_t = evalIvAsm(T, pC, pT, pB, i * 2 + 1);
+            const u_t = evalIvAsm(T, pC_U, pT_U, pB_U, i);
+            const v_t = evalIvAsm(T, pC_V, pT_V, pB_V, i);
 
-            const uv = @max(u, v);
-            var mm0l = @max(yl, uv);
-            var mm0h = @max(yh, uv);
+            const uv = @max(u_t, v_t);
+            const mm0l_t = @max(yl_t, uv);
+            const mm0h_t = @max(yh_t, uv);
+            var mm0l = scalar.toMapByte(T, bits, mm0l_t);
+            var mm0h = scalar.toMapByte(T, bits, mm0h_t);
 
             const peCl = peC[i * 2];
             const peCh = peC[i * 2 + 1];
@@ -206,7 +219,7 @@ test "evalIv: flat frames produce zero interlace evidence" {
     // normally have run makeDeMap(offset=0, srcC) once before; for these
     // flat-input tests we can skip even that since the result is all zero.
 
-    const r = evalIv(width, height, 100, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const r = evalIv(u8, 8, width, height, 100, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expectEqual(@as(i64, 0), r.counter);
     try std.testing.expectEqual(@as(i64, 0), r.counterp);
 }
@@ -237,9 +250,9 @@ test "evalIv: interlaced striping flags pixels" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    edge_mod.makeDeMap(u8, 8, width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
-    const result = evalIv(width, height, 1_000_000, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const result = evalIv(u8, 8, width, height, 1_000_000, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expect(result.counter > 0);
     try std.testing.expect(result.counterp >= result.counter);
 }
@@ -267,8 +280,8 @@ test "evalIv: result is capped at pthreshold" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    edge_mod.makeDeMap(u8, 8, width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
-    const result = evalIv(width, height, 5, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    const result = evalIv(u8, 8, width, height, 5, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expectEqual(@as(i64, 5), result.counter);
 }

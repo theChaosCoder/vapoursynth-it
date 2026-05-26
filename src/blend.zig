@@ -12,9 +12,10 @@
 //!   * For every output pixel, accumulate `pS[x] * val[z]` over `z`
 //!     neighbouring source frames, then shift down by 8.
 //!
-//! Unlike the upstream's MMX loop this is pure Zig with u16 accumulators,
-//! which is exactly equivalent to the original `_asm pmullw / paddw` chain
-//! (16-bit multiply-add, then `psrlw 8 / packuswb`).
+//! Generic over pixel storage `T` (u8/u16). Accumulators are u32 — at u16
+//! input with weights ≤256 and 3 frames the max accumulator value is
+//! ~3·65535·256 ≈ 50M, well within u32. The downscaling shift stays at 8
+//! (weight fixed-point fractional bits) regardless of T.
 
 const std = @import("std");
 const plane = @import("plane.zig");
@@ -75,33 +76,38 @@ pub fn buildKernel(n_minus_base: i32) Kernel {
     return k;
 }
 
-/// View of one source frame's three planes plus their strides. Alias for
-/// `plane.PlaneView(u8)` so the caller's `FrameView` flows straight in.
-pub const SourceView = plane.PlaneView(u8);
+/// View of one source frame's three planes plus their strides. Generic so
+/// callers can use `SourceView(u8)` or `SourceView(u16)`.
+pub fn SourceView(comptime T: type) type {
+    return plane.PlaneView(T);
+}
 
 /// Blend `size` source frames with the per-frame weights from `Kernel`.
 /// Writes into `dst_*` planes. Caller is responsible for fetching the
 /// MakeOutput()-ed reference frames and passing them via `srcs[0..size]`.
-pub fn blendFrames(
+pub inline fn blendFrames(
+    comptime T: type,
+    comptime bits: u8,
     width: i32,
     height: i32,
     kernel: Kernel,
-    srcs: []const SourceView,
-    dst_y: [*]u8,
+    srcs: []const SourceView(T),
+    dst_y: [*]T,
     dst_y_stride: usize,
-    dst_u: [*]u8,
+    dst_u: [*]T,
     dst_u_stride: usize,
-    dst_v: [*]u8,
+    dst_v: [*]T,
     dst_v_stride: usize,
 ) void {
+    _ = bits;
     std.debug.assert(@as(usize, @intCast(kernel.size)) == srcs.len);
     std.debug.assert(width <= MAX_WIDTH);
     const w: usize = @intCast(width);
     const w_uv: usize = w / 2;
 
-    var buf_y: [MAX_WIDTH]u16 = undefined;
-    var buf_u: [MAX_WIDTH / 2]u16 = undefined;
-    var buf_v: [MAX_WIDTH / 2]u16 = undefined;
+    var buf_y: [MAX_WIDTH]u32 = undefined;
+    var buf_u: [MAX_WIDTH / 2]u32 = undefined;
+    var buf_v: [MAX_WIDTH / 2]u32 = undefined;
 
     var y: i32 = 0;
     while (y < height) : (y += 1) {
@@ -114,18 +120,18 @@ pub fn blendFrames(
             // Weights sum to ~256 with size=3 in practice, so each fits in u16.
             // @intCast traps in debug if buildKernel ever produces a negative
             // or oversized value — better than silently `& 0xFF`-truncating.
-            const wt: u16 = @intCast(kernel.weights[z]);
+            const wt: u32 = @intCast(kernel.weights[z]);
             const pS = plane.syp(srcs[z].y, srcs[z].y_stride, height, 0, y);
             const pS_U = plane.syp(srcs[z].u, srcs[z].u_stride, height, 1, y);
             const pS_V = plane.syp(srcs[z].v, srcs[z].v_stride, height, 2, y);
             var x: usize = 0;
             while (x < w) : (x += 1) {
-                buf_y[x] += @as(u16, pS[x]) * wt;
+                buf_y[x] += @as(u32, pS[x]) * wt;
             }
             var xu: usize = 0;
             while (xu < w_uv) : (xu += 1) {
-                buf_u[xu] += @as(u16, pS_U[xu]) * wt;
-                buf_v[xu] += @as(u16, pS_V[xu]) * wt;
+                buf_u[xu] += @as(u32, pS_U[xu]) * wt;
+                buf_v[xu] += @as(u32, pS_V[xu]) * wt;
             }
         }
 
@@ -155,7 +161,7 @@ test "buildKernel: weights sum to ~256 and centred on integer positions" {
     }
 }
 
-test "blendFrames: identical sources -> output equals source" {
+test "blendFrames: identical sources -> output equals source (u8)" {
     const width: i32 = 16;
     const height: i32 = 8;
     const w: usize = @intCast(width);
@@ -184,7 +190,7 @@ test "blendFrames: identical sources -> output equals source" {
     @memset(dv, 0);
 
     const k = buildKernel(0);
-    const sv: SourceView = .{
+    const sv: SourceView(u8) = .{
         .y = yp.ptr,
         .y_stride = w,
         .u = up.ptr,
@@ -192,12 +198,57 @@ test "blendFrames: identical sources -> output equals source" {
         .v = vp.ptr,
         .v_stride = w / 2,
     };
-    var sources = [_]SourceView{ sv, sv, sv };
-    blendFrames(width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
+    var sources = [_]SourceView(u8){ sv, sv, sv };
+    blendFrames(u8, 8, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
 
     // With identical sources whose weights sum to ~256, the output should be
     // ~equal to the source (rounding may differ by 1 LSB).
     for (dy) |v| try std.testing.expect(@abs(@as(i32, v) - 100) <= 1);
     for (du) |v| try std.testing.expect(@abs(@as(i32, v) - 80) <= 1);
     for (dv) |v| try std.testing.expect(@abs(@as(i32, v) - 200) <= 1);
+}
+
+test "blendFrames: u16 path identical sources" {
+    const width: i32 = 16;
+    const height: i32 = 8;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const wh = w * h;
+    const wh_uv = (w / 2) * (h / 2);
+
+    const yp = try std.testing.allocator.alloc(u16, wh);
+    defer std.testing.allocator.free(yp);
+    const up = try std.testing.allocator.alloc(u16, wh_uv);
+    defer std.testing.allocator.free(up);
+    const vp = try std.testing.allocator.alloc(u16, wh_uv);
+    defer std.testing.allocator.free(vp);
+    const dy = try std.testing.allocator.alloc(u16, wh);
+    defer std.testing.allocator.free(dy);
+    const du = try std.testing.allocator.alloc(u16, wh_uv);
+    defer std.testing.allocator.free(du);
+    const dv = try std.testing.allocator.alloc(u16, wh_uv);
+    defer std.testing.allocator.free(dv);
+
+    @memset(yp, 4000);
+    @memset(up, 1000);
+    @memset(vp, 60000);
+    @memset(dy, 0);
+    @memset(du, 0);
+    @memset(dv, 0);
+
+    const k = buildKernel(0);
+    const sv: SourceView(u16) = .{
+        .y = yp.ptr,
+        .y_stride = w,
+        .u = up.ptr,
+        .u_stride = w / 2,
+        .v = vp.ptr,
+        .v_stride = w / 2,
+    };
+    var sources = [_]SourceView(u16){ sv, sv, sv };
+    blendFrames(u16, 12, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
+
+    for (dy) |v| try std.testing.expect(@abs(@as(i32, v) - 4000) <= 2);
+    for (du) |v| try std.testing.expect(@abs(@as(i32, v) - 1000) <= 2);
+    for (dv) |v| try std.testing.expect(@abs(@as(i32, v) - 60000) <= 2);
 }

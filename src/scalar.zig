@@ -31,6 +31,16 @@ pub inline fn pavgb(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
     return @intCast((@as(WideT, a) + @as(WideT, b) + 1) >> 1);
 }
 
+/// Downscale a T-typed pixel or diff to a u8 motion/edge-map byte by
+/// shifting right by `bits - 8`. For T=u8 this is identity. For u16-storage
+/// at bits=10/12/16, the value's upper bits collapse into the u8 range,
+/// keeping motion/edge classification thresholds (12, 4, 40, etc.) at their
+/// 8-bit semantics.
+pub inline fn toMapByte(comptime T: type, comptime bits: u8, v: T) u8 {
+    if (T == u8) return v;
+    return @intCast(v >> @intCast(bits - 8));
+}
+
 // ---------------------------------------------------------------------------
 test "absDiff matches |a - b| both directions" {
     try std.testing.expectEqual(@as(u8, 5), absDiff(@as(u8, 10), 5));

@@ -2,7 +2,8 @@
 //! `reference/vapoursynth-cpp/src/vs_it_process.cpp::CheckSceneChange`.
 //!
 //! Walks every odd row of two consecutive frames; if more than 1/8 of the
-//! sampled pixels differ by more than 50, declares a scene change.
+//! sampled pixels differ by more than 50 (8-bit baseline, scaled per
+//! bit-depth), declares a scene change.
 
 const std = @import("std");
 const plane = @import("plane.zig");
@@ -13,18 +14,25 @@ const scalar = @import("scalar.zig");
 /// over the stride, not just the visible width. We preserve that behaviour
 /// bit-for-bit by using `curr_stride` as the inner-loop bound — `width` is
 /// therefore not a parameter (upstream's `iWidth` is ignored too).
-pub fn checkSceneChange(
+///
+/// Generic over the pixel storage type `T` (u8 or u16) and the actual
+/// bit-depth `bits` (8/10/12/16). The diff threshold scales as
+/// `50 << (bits - 8)` so the algorithm behaves consistently across depths.
+pub inline fn checkSceneChange(
+    comptime T: type,
+    comptime bits: u8,
     height: i32,
-    prev_y: [*]const u8,
+    prev_y: [*]const T,
     prev_stride: usize,
-    curr_y: [*]const u8,
+    curr_y: [*]const T,
     curr_stride: usize,
 ) bool {
     const stride_u: usize = curr_stride;
     const stride_i: i32 = @intCast(curr_stride);
     var sum: i64 = 0;
-    const LANES = 32;
-    const threshold_vec: @Vector(LANES, u8) = @splat(50);
+    const LANES = 32 / @sizeOf(T);
+    const threshold: T = comptime @intCast(@as(u32, 50) << @intCast(bits - 8));
+    const threshold_vec: @Vector(LANES, T) = @splat(threshold);
     var y: i32 = 1;
     while (y < height) : (y += 2) {
         const pC = plane.syp(curr_y, curr_stride, height, 0, y);
@@ -40,11 +48,11 @@ pub fn checkSceneChange(
             sum += @reduce(.Add, @as(@Vector(LANES, u16), ones));
         }
         while (x < stride_u) : (x += 1) {
-            if (scalar.absDiff(pC[x], pP[x]) > 50) sum += 1;
+            if (scalar.absDiff(pC[x], pP[x]) > threshold) sum += 1;
         }
     }
-    const threshold: i64 = @divTrunc(@as(i64, height) * @as(i64, stride_i), 8);
-    return sum > threshold;
+    const threshold_count: i64 = @divTrunc(@as(i64, height) * @as(i64, stride_i), 8);
+    return sum > threshold_count;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +64,7 @@ test "checkSceneChange: identical frames -> no scene change" {
     const a = try std.testing.allocator.alloc(u8, w * h);
     defer std.testing.allocator.free(a);
     @memset(a, 128);
-    try std.testing.expectEqual(false, checkSceneChange(height, a.ptr, w, a.ptr, w));
+    try std.testing.expectEqual(false, checkSceneChange(u8, 8, height, a.ptr, w, a.ptr, w));
 }
 
 test "checkSceneChange: completely different frames -> scene change" {
@@ -70,5 +78,23 @@ test "checkSceneChange: completely different frames -> scene change" {
     defer std.testing.allocator.free(b);
     @memset(a, 0);
     @memset(b, 255);
-    try std.testing.expectEqual(true, checkSceneChange(height, a.ptr, w, b.ptr, w));
+    try std.testing.expectEqual(true, checkSceneChange(u8, 8, height, a.ptr, w, b.ptr, w));
+}
+
+test "checkSceneChange: u16 path, scaled threshold" {
+    const width: i32 = 32;
+    const height: i32 = 16;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const a = try std.testing.allocator.alloc(u16, w * h);
+    defer std.testing.allocator.free(a);
+    const b = try std.testing.allocator.alloc(u16, w * h);
+    defer std.testing.allocator.free(b);
+    @memset(a, 0);
+    @memset(b, 65535);
+    try std.testing.expectEqual(true, checkSceneChange(u16, 16, height, a.ptr, w, b.ptr, w));
+
+    @memset(a, 512);
+    @memset(b, 512);
+    try std.testing.expectEqual(false, checkSceneChange(u16, 10, height, a.ptr, w, b.ptr, w));
 }

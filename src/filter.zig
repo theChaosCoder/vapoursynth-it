@@ -914,7 +914,7 @@ inline fn drawPrevFrame(comptime T: type, comptime bits: u8, inst: *Filter, zapi
         defer zapi.freeFrame(srcC);
         const vP = viewOf(T, zapi, srcP.?);
         const vC = viewOf(T, zapi, srcC.?);
-        result = scene_mod.checkSceneChange(T, bits, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
+        result = scene_mod.checkSceneChange(T, bits, inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     }
     if (result) {
         inst.call_state.iUseFrame = inst.frame_info[@intCast(n_prev)].match;

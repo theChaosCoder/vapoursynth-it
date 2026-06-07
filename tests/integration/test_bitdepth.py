@@ -1,6 +1,6 @@
 """End-to-end validation of the 10/12/16-bit YUV420 pipelines.
 
-Three layers:
+Layers:
 
 1.  **Acceptance** — the filter accepts each bit-depth, preserves format,
     and produces the expected output frame count.
@@ -9,9 +9,12 @@ Three layers:
 3.  **Cross-bit-depth consistency** — for an interlaced-stripes pattern
     where the 10-bit input is the 8-bit input left-shifted by 2, the
     10-bit IT output must equal the 8-bit IT output left-shifted by 2,
-    pixel-for-pixel. Same for 12-bit (<<4) and 16-bit (<<8). This is the
-    strongest validation we can do without an external high-bit-depth
-    oracle.
+    pixel-for-pixel. Same for 12-bit (<<4) and 16-bit (<<8).
+4.  **Validation** — invalid formats / bit-depths are rejected.
+5.  **Sub-8-bit precision (oracle-free)** — Layer 3 zeroes every low
+    `(bits-8)` bit, so it never exercises the precision code. These tests
+    pin what is checkable without a high-bit-depth oracle: exact low-bit
+    round-trip, no silent truncation to 8-bit, and in-range averaging.
 
 Run via:
 
@@ -182,3 +185,79 @@ def test_rejects_float(core):
     clip = core.std.BlankClip(format=vs.YUV420PS, width=128, height=96, length=10)
     with pytest.raises(vs.Error, match="(integer|YUV)"):
         core.zit.IT(clip)
+
+
+# ---------------------------------------------------------------------------
+# Layer 5: sub-8-bit precision (oracle-free)
+# ---------------------------------------------------------------------------
+#
+# The cross-bit-depth test (Layer 3) feeds `8bit << shift`, so every low
+# `(bits-8)` bit is zero — the precision-handling code (wide diffs,
+# `>> (bits-8)` downscales, `<< (bits-8)` thresholds) collapses to the 8-bit
+# result and is never actually exercised. There is no external high-bit-depth
+# oracle, so the tests below pin the properties we *can* assert without one:
+# low bits survive the output path exactly, two inputs that are 8-bit-identical
+# but differ in the low bits produce correspondingly different output (nothing
+# silently truncates to 8 bit), and the wide-precision averaging paths stay in
+# range on low-bit input. Correctness of the *decision* math on sub-8-bit
+# precision remains unverified by construction (it needs an oracle Layer 3
+# can't provide).
+
+# bit-depth -> a mid-range value with non-zero low bits set
+LOWBIT_VALUES = [
+    (10, vs.YUV420P10, 0x2A7),   # 679;   >>2 = 169
+    (12, vs.YUV420P12, 0xA5F),   # 2655;  >>4 = 165
+    (16, vs.YUV420P16, 0xABCD),  # 43981; >>8 = 171
+]
+
+
+@pytest.mark.parametrize("bits,vs_fmt,value", LOWBIT_VALUES)
+@pytest.mark.parametrize("fps", [30, 24])
+def test_hbd_low_bits_preserved_exact(core, bits, vs_fmt, value, fps):
+    """A flat clip whose value has low bits set must round-trip *exactly*.
+
+    Flat input is judged progressive (ip='P'), so the output is a pure field
+    copy: the value must survive bit-for-bit, not get truncated to 8-bit."""
+    clip = _make_flat_clip(core, vs_fmt, value, length=20)
+    out = core.zit.IT(clip, fps=fps)
+    for n in (0, out.num_frames // 2, out.num_frames - 1):
+        for v in _read_luma_u8_or_u16(out.get_frame(n), bits, n_samples=32):
+            assert v == value, f"bits={bits} fps={fps} frame={n}: expected {value}, got {v}"
+
+
+@pytest.mark.parametrize("bits,vs_fmt", [(b, f) for b, f, _ in LOWBIT_VALUES])
+def test_hbd_low_bits_are_not_truncated(core, bits, vs_fmt):
+    """Two flat clips identical after `>> (bits-8)` but differing in the low
+    bits must produce *different* output. If anything in the pipeline silently
+    rounded pixels to 8-bit, both would collapse to the same value."""
+    shift = bits - 8
+    base = 0xAB << shift              # 8-bit value 0xAB, low bits zero
+    v_hi = base | ((1 << shift) - 1)  # same 8-bit value, all low bits set
+    assert (base >> shift) == (v_hi >> shift)  # 8-bit-identical by construction
+    assert base != v_hi
+
+    out_lo = core.zit.IT(_make_flat_clip(core, vs_fmt, base, length=12), fps=30)
+    out_hi = core.zit.IT(_make_flat_clip(core, vs_fmt, v_hi, length=12), fps=30)
+    s_lo = _read_luma_u8_or_u16(out_lo.get_frame(0), bits)
+    s_hi = _read_luma_u8_or_u16(out_hi.get_frame(0), bits)
+    assert s_lo != s_hi, f"bits={bits}: low bits truncated — {base}/{v_hi} collapsed to {s_lo}"
+    assert all(v == base for v in s_lo)
+    assert all(v == v_hi for v in s_hi)
+
+
+@pytest.mark.parametrize("bits,vs_fmt,shift", DEPTHS)
+@pytest.mark.parametrize("dimode", [1, 2, 3])
+def test_hbd_lowbit_interlaced_stays_in_range(core, bits, vs_fmt, shift, dimode):
+    """Interlaced content with non-zero low bits drives the wide-precision
+    averaging paths (deinterlace / simple-blur / one-field). No oracle, but
+    every output sample must stay within [0, 2**bits) — catches overflow or a
+    too-narrow accumulator in the blend math on real high-bit-depth input."""
+    bright = (220 << shift) | ((1 << shift) - 1)
+    dark = (20 << shift) | 1
+    clip = _make_interlaced_stripes(core, vs_fmt, bright, dark, length=30)
+    out = core.zit.IT(clip, diMode=dimode)
+    hi = 1 << bits
+    for n in (0, out.num_frames // 2, out.num_frames - 1):
+        samples = _read_luma_u8_or_u16(out.get_frame(n), bits, n_samples=64)
+        assert all(0 <= v < hi for v in samples), \
+            f"bits={bits} diMode={dimode} frame={n}: out of range {samples}"

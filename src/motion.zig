@@ -350,13 +350,19 @@ pub inline fn makeSimpleBlurMap(
         const pT = plane.syp(tb_y, tb_s, height, 0, y - 1);
         const pC = plane.syp(ce_y, ce_s, height, 0, y);
         const pB = plane.syp(tb_y, tb_s, height, 0, y + 1);
+        const max_pix_vec: @Vector(LANES, T) = @splat(@intCast(max_pix));
         var i: usize = 0;
-        // SIMD body via saturating arithmetic. Upstream formula
-        // `max(0, min(max_pix, ct + cb) - 2*tb)` maps element-wise to
-        // `(ct +| cb) -| (tb +| tb)` for u8 (where +| / -| saturate at the
-        // pixel range = u8 max). For u16 input the saturation point is the
-        // type max (65535), but values are well below; final
-        // `toMapByteVec(>> (bits-8))` clamps + downscales to the u8 map.
+        // SIMD body for upstream's `max(0, min(max_pix, ct + cb) - 2*tb)`.
+        // The additive `ct + cb` is clamped to `max_pix` (= the pixel range),
+        // mirroring the scalar `@min(max_pix, ...)`. For u8 the saturating add
+        // already caps at 255 = max_pix, so the clamp is a no-op and 8-bit
+        // output is unchanged. For u16 the type-max saturation (65535) sits
+        // far above max_pix, so WITHOUT this clamp high-contrast ≥10-bit
+        // content produces `delta > max_pix`, and the `>> (bits-8)` downscale
+        // in toMapByteVec then overflows the u8 map — both a SIMD/scalar
+        // divergence and an integer-cast trap in safe builds. `tb +| tb` is
+        // exact below the type max and saturates to 0 in the subtract above
+        // it otherwise, matching the scalar `@max(0, … - 2*tb)`.
         while (i + LANES <= w) : (i += LANES) {
             const c = simd.load(LANES, pC, i);
             const t = simd.load(LANES, pT, i);
@@ -365,7 +371,7 @@ pub inline fn makeSimpleBlurMap(
             const cb = simd.absDiff(LANES, c, b);
             const tb = simd.absDiff(LANES, t, b);
             const tb2 = tb +| tb;
-            const delta = (ct +| cb) -| tb2;
+            const delta = @min(ct +| cb, max_pix_vec) -| tb2;
             const delta_u8 = simd.toMapByteVec(T, bits, LANES, delta);
             simd.store(LANES, pD.ptr, i, delta_u8);
         }
@@ -482,4 +488,37 @@ test "makeSimpleBlurMap: flat frame yields zero blur (u8)" {
     @memset(dst, 0xFF);
     makeSimpleBlurMap(u8, 8, width, height, dst, yp.ptr, w, yp.ptr, w);
     for (dst) |x| try std.testing.expectEqual(@as(u8, 0), x);
+}
+
+test "makeSimpleBlurMap: high-contrast u16 SIMD body matches scalar tail" {
+    // Regression: at >8-bit, a high-contrast vertical pattern drives
+    // `ct + cb` well past max_pix (1023 at 10-bit). The SIMD body must clamp
+    // to max_pix exactly like the scalar tail; otherwise `delta >> (bits-8)`
+    // overflows the u8 map (a safe-build integer-cast trap, UB in ReleaseFast,
+    // and a SIMD/scalar divergence). Width 24 → u16 LANES=16 covers cols
+    // 0..15 via SIMD and 16..23 via the scalar tail; rows are spatially
+    // uniform, so every column of a row must produce the identical map byte.
+    const width: i32 = 24;
+    const height: i32 = 8;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const yp = try std.testing.allocator.alloc(u16, w * h);
+    defer std.testing.allocator.free(yp);
+    const dst = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(dst);
+    var r: usize = 0;
+    while (r < h) : (r += 1) {
+        const v: u16 = if (r & 1 == 0) 1000 else 16; // big inter-row gap
+        @memset(yp[r * w ..][0..w], v);
+    }
+    @memset(dst, 0xAA);
+    makeSimpleBlurMap(u16, 10, width, height, dst, yp.ptr, w, yp.ptr, w);
+    var y: usize = 0;
+    while (y < h) : (y += 1) {
+        const expected = dst[y * w + 0];
+        var x: usize = 1;
+        while (x < w) : (x += 1) {
+            try std.testing.expectEqual(expected, dst[y * w + x]);
+        }
+    }
 }

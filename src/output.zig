@@ -54,7 +54,7 @@ pub inline fn copyCPNField(
     src: *const plane.PlaneView(T),
     ref: *const plane.PlaneView(T),
 ) void {
-    _ = bits;
+    _ = bits; // unused: pure copy / vertical average needs no bit-depth-scaled threshold; param kept for kernel-signature uniformity
     const row_y: usize = @intCast(width);
     const row_uv: usize = @intCast(chromaWidth(width));
 
@@ -96,7 +96,7 @@ pub inline fn deintOneField(
     src: *const plane.PlaneView(T),
     ref: *const plane.PlaneView(T),
 ) void {
-    _ = bits;
+    _ = bits; // unused: pure copy / vertical average needs no bit-depth-scaled threshold; param kept for kernel-signature uniformity
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
     std.debug.assert(simple_blur.len == w * h);
@@ -651,7 +651,7 @@ pub inline fn simpleBlur(
     src: *const plane.PlaneView(T),
     ref: *const plane.PlaneView(T),
 ) void {
-    _ = bits;
+    _ = bits; // unused: pure copy / vertical average needs no bit-depth-scaled threshold; param kept for kernel-signature uniformity
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
     std.debug.assert(motion4di.len == w * h);

@@ -125,7 +125,11 @@ pub const MotionStats = struct {
 /// Wide diff buffer `bufP0` scales with `T` so u16/10-bit signed diffs fit;
 /// `bufP1` stays u8 (after clamp + per-bit-depth downscale) so thresholds
 /// 36 / 18 remain the same.
-pub inline fn makeMotionMap(
+// Intentionally NOT `inline`: this keeps the ~40 KB of scratch (`bufP0` +
+// `bufP1`, at u16) in makeMotionMap's own transient frame instead of hoisting
+// it into the deeply-inlined getFrame frame, where it would coexist with
+// blendFrames' ~64 KB. The O(w·h) body dwarfs the one call.
+pub fn makeMotionMap(
     comptime T: type,
     comptime bits: u8,
     width: i32,
@@ -141,10 +145,13 @@ pub inline fn makeMotionMap(
     const widthminus16: i32 = width - 16;
     // Signed wide-enough type for pixel diffs (i16 for u8, i32 for u16).
     const Wide = std.meta.Int(.signed, @bitSizeOf(T) * 2);
-    const max_pix: Wide = comptime @as(Wide, (@as(@TypeOf(1 << @as(u32, bits)), 1) << bits) - 1);
+    const max_pix: Wide = (1 << bits) - 1; // comptime_int -> Wide; = 2^bits - 1
     // Pass2 SIMD width = 32 bytes / sizeof(Wide).
     const P2_LANES: usize = 32 / @sizeOf(Wide);
 
+    // Fixed at MAX_WIDTH (never reallocates); only the first `width` entries
+    // are touched. `bufP0` is `Wide`-typed (i16 at u8, i32 at u16), which is
+    // why it lives here rather than in a per-instance byte buffer.
     var bufP0: [MAX_WIDTH]Wide = undefined;
     var bufP1: [MAX_WIDTH]u8 = undefined;
 

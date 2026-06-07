@@ -12,9 +12,10 @@
 //!   * For every output pixel, accumulate `pS[x] * val[z]` over `z`
 //!     neighbouring source frames, then shift down by 8.
 //!
-//! Generic over pixel storage `T` (u8/u16). Accumulators are u32 — at u16
-//! input with weights ≤256 and 3 frames the max accumulator value is
-//! ~3·65535·256 ≈ 50M, well within u32. The downscaling shift stays at 8
+//! Generic over pixel storage `T` (u8/u16). Accumulators are u32 — each
+//! output pixel is `Σ_z pS[z] · weight[z]`, and the weights sum to ~256
+//! (total across the kernel, not 256 each), so the max is bounded by
+//! ~65535·256 ≈ 16.8M — far within u32. The downscaling shift stays at 8
 //! (weight fixed-point fractional bits) regardless of T.
 
 const std = @import("std");
@@ -85,7 +86,11 @@ pub fn SourceView(comptime T: type) type {
 /// Blend `size` source frames with the per-frame weights from `Kernel`.
 /// Writes into `dst_*` planes. Caller is responsible for fetching the
 /// MakeOutput()-ed reference frames and passing them via `srcs[0..size]`.
-pub inline fn blendFrames(
+// Intentionally NOT `inline`: keeps the ~64 KB of accumulators below in
+// blendFrames' own transient frame rather than the deeply-inlined getFrame
+// frame (where they would coexist with makeMotionMap's scratch). The blend
+// path is fps=24 + blend=true only, and the O(size·w·h) body dwarfs the call.
+pub fn blendFrames(
     comptime T: type,
     comptime bits: u8,
     width: i32,
@@ -105,6 +110,7 @@ pub inline fn blendFrames(
     const w: usize = @intCast(width);
     const w_uv: usize = w / 2;
 
+    // Fixed at MAX_WIDTH (never reallocates); only the first `w`/`w_uv` are used.
     var buf_y: [MAX_WIDTH]u32 = undefined;
     var buf_u: [MAX_WIDTH / 2]u32 = undefined;
     var buf_v: [MAX_WIDTH / 2]u32 = undefined;

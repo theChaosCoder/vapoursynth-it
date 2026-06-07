@@ -21,8 +21,8 @@ export fn VapourSynthPluginInit2(plugin: *vs.Plugin, vspapi: *const vs.PLUGINAPI
         "IT",
         "clip:vnode;" ++
             "fps:int:opt;" ++
-            "threshold:int:opt;" ++
-            "pthreshold:int:opt;" ++
+            "threshold:int:opt;" ++ // match-confidence gate (thcomb in compCp/compCn); default 20
+            "pthreshold:int:opt;" ++ // progressive-vs-interlaced classification gate; default 75
             "ref:data:opt;" ++ // "TOP" | "BOTTOM" | "ALL" | "NONE"
             "blend:int:opt;" ++ // 0|1 — motion-blended 24p, fps=24 only
             "diMode:int:opt;", // 0=NONE, 1=DEINTERLACE, 2=SIMPLE_BLUR, 3=ONE_FIELD (default)

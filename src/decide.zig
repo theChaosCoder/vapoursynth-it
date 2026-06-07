@@ -43,6 +43,7 @@ pub fn compCp(
     cur_frame: i32,
     width: i32,
     height: i32,
+    threshold: i32,
     max_frames: i32,
     frame_info: []CFrameInfo,
     cs: *CallState,
@@ -78,7 +79,15 @@ pub fn compCp(
     const mne = n0 > thm;
     const mno = n1 > thm;
 
-    const thcomb: i64 = plane.adjPara(20, width, height);
+    // `threshold` (default 20) gates the confident field-match path: only when
+    // both the current and candidate combined-IV sums fall below it do the
+    // nuanced C/P match heuristics run; above it the simpler fallback is used.
+    // Upstream hardcoded this as AdjPara(20) (vs_it_process.cpp:346) and left
+    // its `threshold` parameter unwired — we honour the parameter. At the
+    // default 20 the result is identical to upstream (and is what every
+    // bit-exact oracle test pins). See also [pthreshold], which instead gates
+    // the separate progressive-vs-interlaced classification.
+    const thcomb: i64 = plane.adjPara(threshold, width, height);
 
     if (n != 0) {
         const dc_p = if (cs.iSumC - cs.iSumP >= 0) cs.iSumC - cs.iSumP else cs.iSumP - cs.iSumC;
@@ -151,6 +160,7 @@ pub fn compCn(
     cur_frame: i32,
     width: i32,
     height: i32,
+    threshold: i32,
     max_frames: i32,
     frame_info: []CFrameInfo,
     cs: *CallState,
@@ -183,7 +193,9 @@ pub fn compCn(
     const mne = n0 > thm;
     const mno = n1 > thm;
 
-    const thcomb: i64 = plane.adjPara(20, width, height);
+    // `threshold`-controlled — see compCp. AdjPara(threshold) at the default
+    // 20 reproduces upstream's hardcoded AdjPara(20).
+    const thcomb: i64 = plane.adjPara(threshold, width, height);
 
     if (n != 0) {
         const dc_n = if (cs.iSumC - cs.iSumN >= 0) cs.iSumC - cs.iSumN else cs.iSumN - cs.iSumC;
@@ -562,6 +574,35 @@ test "compCp: equal sums, first frame uses default branch" {
     fi[0].diffP1 = 1000;
     fi[1].diffP0 = 1000;
     fi[1].diffP1 = 1000;
-    _ = compCp(0, 720, 480, 20, fi, &cs);
+    _ = compCp(0, 720, 480, 20, 20, fi, &cs); // threshold=20, max_frames=20
+    try testing.expectEqual(@as(u8, 'C'), cs.iUseFrame);
+}
+
+test "compCp: threshold gates the confident-match path (thcomb)" {
+    // At 720x480 adjPara(t) == t, so thcomb == threshold. With iSumC=5,
+    // iSumP=25 the OR shortcut `dc*10 < sum` is false (200 >= 30), so the
+    // confident-match path is taken iff max(sumC, sumP)=25 < thcomb:
+    //   threshold=30 -> thcomb=30 -> nuanced path -> weak 'c'
+    //   threshold=20 -> thcomb=20 -> fallthrough  -> strong 'C'
+    // Proves the parameter is wired (it was dead/ignored before, like upstream).
+    const fi = try makeFrameInfos(20, testing.allocator);
+    defer testing.allocator.free(fi);
+    const e_buf = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(e_buf);
+    const m1 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m1);
+    const m2 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m2);
+    var cs = CallState{ .edgeMap = e_buf, .motionMap4DI = m1, .motionMap4DIMax = m2 };
+
+    cs.iSumC = 5;
+    cs.iSumP = 25;
+    _ = compCp(5, 720, 480, 30, 20, fi, &cs); // threshold=30 -> weak match
+    try testing.expectEqual(@as(u8, 'c'), cs.iUseFrame);
+
+    cs.iSumC = 5;
+    cs.iSumP = 25;
+    cs.iUseFrame = 'C';
+    _ = compCp(5, 720, 480, 20, 20, fi, &cs); // threshold=20 -> strong match
     try testing.expectEqual(@as(u8, 'C'), cs.iUseFrame);
 }

@@ -703,13 +703,13 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
     // Dispatch on ref. For ref="ALL" pick the side with the smaller sum to
     // run its CompC* — that's the candidate with stronger evidence.
     switch (inst.ref) {
-        .top => _ = decide_mod.compCp(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state),
-        .bottom => _ = decide_mod.compCn(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state),
+        .top => _ = decide_mod.compCp(n, inst.width, inst.height, inst.threshold, inst.max_frames, inst.frame_info, &inst.call_state),
+        .bottom => _ = decide_mod.compCn(n, inst.width, inst.height, inst.threshold, inst.max_frames, inst.frame_info, &inst.call_state),
         .all => {
             if (inst.call_state.iSumP < inst.call_state.iSumN) {
-                _ = decide_mod.compCp(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state);
+                _ = decide_mod.compCp(n, inst.width, inst.height, inst.threshold, inst.max_frames, inst.frame_info, &inst.call_state);
             } else {
-                _ = decide_mod.compCn(n, inst.width, inst.height, inst.max_frames, inst.frame_info, &inst.call_state);
+                _ = decide_mod.compCn(n, inst.width, inst.height, inst.threshold, inst.max_frames, inst.frame_info, &inst.call_state);
             }
         },
         .none => {}, // Caller guarantees we're not invoked when ref=NONE.

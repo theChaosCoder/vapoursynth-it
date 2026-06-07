@@ -57,7 +57,17 @@ fn FrameViewMut(comptime T: type) type {
 /// byte stride to sample (T-element) stride. Pointer/stride lifetime is
 /// tied to `frame`; callers must not hold the returned view past
 /// `freeFrame`.
-inline fn viewOf(comptime T: type, zapi: *const ZAPI, frame: *const vs.Frame) FrameView(T) {
+///
+/// `frame` is the (optional) `getFrameFilter` result. A null means a source
+/// frame was read without being requested in `requestNeededFrames` — a
+/// frame-reach bug. We panic deterministically in EVERY build mode (unlike
+/// `.?`, which is undefined behaviour under ReleaseFast) so the bug is
+/// diagnosable instead of silently corrupting output; the inlined call site
+/// shows up in the panic stack trace. The reach analysis is intricate
+/// (especially the fps=24 window), so this guard is load-bearing.
+inline fn viewOf(comptime T: type, zapi: *const ZAPI, frame_opt: ?*const vs.Frame) FrameView(T) {
+    const frame = frame_opt orelse
+        @panic("IT: source frame unavailable in getFrame — frame-reach bug (requestNeededFrames under-requested)");
     const y_stride_b: usize = @intCast(zapi.getStride(frame, 0));
     const u_stride_b: usize = @intCast(zapi.getStride(frame, 1));
     const v_stride_b: usize = @intCast(zapi.getStride(frame, 2));
@@ -654,7 +664,7 @@ inline fn getFrameSub(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
 inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
-    const vC = viewOf(T, zapi, srcC.?);
+    const vC = viewOf(T, zapi, srcC);
 
     ensureMotionMap(T, bits, inst, zapi, inst.call_state.currentFrame);
     ensureMotionMap(T, bits, inst, zapi, inst.call_state.currentFrame + 1);
@@ -674,7 +684,7 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
     if (inst.b_ref_n) {
         const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
         defer zapi.freeFrame(srcN);
-        const vN = viewOf(T, zapi, srcN.?);
+        const vN = viewOf(T, zapi, srcN);
         const ev_n = eval_iv_mod.evalIv(T, bits, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
         inst.call_state.iSumN = ev_n.counter;
         inst.call_state.iSumPN = ev_n.counterp;
@@ -684,7 +694,7 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
     if (inst.b_ref_p) {
         const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
         defer zapi.freeFrame(srcP);
-        const vP = viewOf(T, zapi, srcP.?);
+        const vP = viewOf(T, zapi, srcP);
         const ev_p = eval_iv_mod.evalIv(T, bits, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
         inst.call_state.iSumP = ev_p.counter;
         inst.call_state.iSumPP = ev_p.counterp;
@@ -718,8 +728,8 @@ inline fn ensureMotionMap(comptime T: type, comptime bits: u8, inst: *Filter, za
     const srcC = zapi.getFrameFilter(n, inst.node);
     defer zapi.freeFrame(srcP);
     defer zapi.freeFrame(srcC);
-    const vP = viewOf(T, zapi, srcP.?);
-    const vC = viewOf(T, zapi, srcC.?);
+    const vP = viewOf(T, zapi, srcP);
+    const vC = viewOf(T, zapi, srcC);
 
     const stats = motion_mod.makeMotionMap(T, bits, inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     inst.frame_info[@intCast(n)].diffP0 = stats.diffP0;
@@ -781,9 +791,9 @@ inline fn deinterlaceInto(comptime T: type, comptime bits: u8, inst: *Filter, za
     defer zapi.freeFrame(srcP);
     defer zapi.freeFrame(srcC);
     defer zapi.freeFrame(srcN);
-    const vP = viewOf(T, zapi, srcP.?);
-    const vC = viewOf(T, zapi, srcC.?);
-    const vN = viewOf(T, zapi, srcN.?);
+    const vP = viewOf(T, zapi, srcP);
+    const vC = viewOf(T, zapi, srcC);
+    const vN = viewOf(T, zapi, srcN);
 
     motion_mod.makeMotionMap2Min(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
 
@@ -797,7 +807,7 @@ inline fn deinterlaceInto(comptime T: type, comptime bits: u8, inst: *Filter, za
 inline fn simpleBlurInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
-    const vC = viewOf(T, zapi, srcC.?);
+    const vC = viewOf(T, zapi, srcC);
 
     // When iUseFrame is 'C' (default), `vR` is a value copy of `vC` — both
     // views point at the same frame bytes. The algorithm reads only, so the
@@ -808,11 +818,11 @@ inline fn simpleBlurInto(comptime T: type, comptime bits: u8, inst: *Filter, zap
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
-            vR = viewOf(T, zapi, srcR_opt.?);
+            vR = viewOf(T, zapi, srcR_opt);
         },
         'N' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
-            vR = viewOf(T, zapi, srcR_opt.?);
+            vR = viewOf(T, zapi, srcR_opt);
         },
         else => {},
     }
@@ -827,7 +837,7 @@ inline fn simpleBlurInto(comptime T: type, comptime bits: u8, inst: *Filter, zap
 inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
-    const vC = viewOf(T, zapi, srcC.?);
+    const vC = viewOf(T, zapi, srcC);
     // When iUseFrame is 'C' (default), `vR` is a value copy of `vC` — both
     // views point at the same frame bytes. The algorithm reads only, so the
     // duplicated pointers are harmless. Reassigned to the P/N frame's view
@@ -837,11 +847,11 @@ inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
-            vR = viewOf(T, zapi, srcR_opt.?);
+            vR = viewOf(T, zapi, srcR_opt);
         },
         'N' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
-            vR = viewOf(T, zapi, srcR_opt.?);
+            vR = viewOf(T, zapi, srcR_opt);
         },
         else => {},
     }
@@ -854,7 +864,7 @@ inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
 inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
-    const vC = viewOf(T, zapi, srcC.?);
+    const vC = viewOf(T, zapi, srcC);
 
     // When iUseFrame is 'C' (default), `vR` is a value copy of `vC` — both
     // views point at the same frame bytes. The algorithm reads only, so the
@@ -865,11 +875,11 @@ inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     switch (toUpper(inst.call_state.iUseFrame)) {
         'P' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
-            vR = viewOf(T, zapi, srcR_opt.?);
+            vR = viewOf(T, zapi, srcR_opt);
         },
         'N' => {
             srcR_opt = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
-            vR = viewOf(T, zapi, srcR_opt.?);
+            vR = viewOf(T, zapi, srcR_opt);
         },
         else => {},
     }
@@ -883,8 +893,8 @@ inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcP);
     defer zapi.freeFrame(srcN);
-    const vP = viewOf(T, zapi, srcP.?);
-    const vN = viewOf(T, zapi, srcN.?);
+    const vP = viewOf(T, zapi, srcP);
+    const vN = viewOf(T, zapi, srcN);
     motion_mod.makeMotionMap2Max(T, bits, inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
@@ -912,8 +922,8 @@ inline fn drawPrevFrame(comptime T: type, comptime bits: u8, inst: *Filter, zapi
         const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
         defer zapi.freeFrame(srcP);
         defer zapi.freeFrame(srcC);
-        const vP = viewOf(T, zapi, srcP.?);
-        const vC = viewOf(T, zapi, srcC.?);
+        const vP = viewOf(T, zapi, srcP);
+        const vC = viewOf(T, zapi, srcC);
         result = scene_mod.checkSceneChange(T, bits, inst.width, inst.height, vP.y, vP.y_stride, vC.y, vC.y_stride);
     }
     if (result) {

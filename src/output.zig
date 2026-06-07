@@ -293,6 +293,14 @@ fn Iv5Rows(comptime T: type) type {
     };
 }
 
+/// The five luma-only IV scores (C / P / N / avg(C,P) / avg(C,N)) for one
+/// pixel. On chroma rows the SIMD body has already computed these as vectors,
+/// so it hands the per-lane values to `deinterlacePixelScalar` instead of
+/// letting it recompute them.
+fn LumaScores(comptime T: type) type {
+    return struct { ivc: T, ivp: T, ivn: T, ivcp: T, ivcn: T };
+}
+
 /// Per-pixel scalar deinterlacer kernel. Computes the 5 IV scores
 /// (C / P / N / avg(C,P) / avg(C,N)) for luma and chroma, picks the
 /// best-scoring candidate, then applies the motion-gated vertical-average
@@ -308,11 +316,17 @@ fn Iv5Rows(comptime T: type) type {
 /// BOTH the luma pick and the motion-override gate. Do not "optimise"
 /// away the chroma IV math when `write_chroma=false` — it will change the
 /// luma output. `write_chroma` only gates the chroma WRITE, not the SCORE.
+/// `luma_precomp`: when true the 5 luma IV scores are taken from `precomp`
+/// (the SIMD body already computed them for this column) instead of being
+/// recomputed — this avoids the duplicate luma-IV work on chroma rows. When
+/// false, `precomp` is unused (pass `undefined`). The SIMD lane values are
+/// bit-identical to the scalar recomputation (same ivKernel / pavgb).
 inline fn deinterlacePixelScalar(
     comptime T: type,
     comptime bits: u8,
     comptime write_luma: bool,
     comptime write_chroma: bool,
+    comptime luma_precomp: bool,
     x: usize,
     y_rows: Iv5Rows(T),
     u_rows: Iv5Rows(T),
@@ -322,17 +336,19 @@ inline fn deinterlacePixelScalar(
     pD: [*]T,
     pD_U: [*]T,
     pD_V: [*]T,
+    precomp: LumaScores(T),
 ) void {
     const xh = x >> 1;
     const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
     const iv_th: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
 
     // Luma IV scores: C / P / N / avg(C,P) / avg(C,N) all against (T, B).
-    const ivc_l = ivKernel(T, y_rows.c[x], y_rows.t[x], y_rows.b[x]);
-    const ivp_l = ivKernel(T, y_rows.p[x], y_rows.t[x], y_rows.b[x]);
-    const ivn_l = ivKernel(T, y_rows.n[x], y_rows.t[x], y_rows.b[x]);
-    const ivcp_l = ivKernel(T, scalar.pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
-    const ivcn_l = ivKernel(T, scalar.pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
+    // On chroma rows the SIMD body already produced these — reuse via precomp.
+    const ivc_l = if (luma_precomp) precomp.ivc else ivKernel(T, y_rows.c[x], y_rows.t[x], y_rows.b[x]);
+    const ivp_l = if (luma_precomp) precomp.ivp else ivKernel(T, y_rows.p[x], y_rows.t[x], y_rows.b[x]);
+    const ivn_l = if (luma_precomp) precomp.ivn else ivKernel(T, y_rows.n[x], y_rows.t[x], y_rows.b[x]);
+    const ivcp_l = if (luma_precomp) precomp.ivcp else ivKernel(T, scalar.pavgb(y_rows.c[x], y_rows.p[x]), y_rows.t[x], y_rows.b[x]);
+    const ivcn_l = if (luma_precomp) precomp.ivcn else ivKernel(T, scalar.pavgb(y_rows.c[x], y_rows.n[x]), y_rows.t[x], y_rows.b[x]);
 
     // Chroma U IV scores.
     const ivc_u = ivKernel(T, u_rows.c[xh], u_rows.t[xh], u_rows.b[xh]);
@@ -612,9 +628,25 @@ pub inline fn deinterlace(
             // pair wins" semantics — adjacent xc values share the same xch
             // index and the second naturally overwrites the first.
             if (chroma_row) {
+                // Reuse the SIMD-computed luma IV instead of recomputing it per
+                // column (chroma write still needs the combined luma+chroma iv).
+                // Vector element access needs a comptime index, so spill to
+                // arrays first; the values are bit-identical to scalar recompute.
+                const ivc_a: [LL]T = ivc_l_v;
+                const ivp_a: [LL]T = ivp_l_v;
+                const ivn_a: [LL]T = ivn_l_v;
+                const ivcp_a: [LL]T = ivcp_l_v;
+                const ivcn_a: [LL]T = ivcn_l_v;
                 var xc = xx;
                 while (xc < xx + LL) : (xc += 1) {
-                    deinterlacePixelScalar(T, bits, false, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
+                    const lane = xc - xx;
+                    deinterlacePixelScalar(T, bits, false, true, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, .{
+                        .ivc = ivc_a[lane],
+                        .ivp = ivp_a[lane],
+                        .ivn = ivn_a[lane],
+                        .ivcp = ivcp_a[lane],
+                        .ivcn = ivcn_a[lane],
+                    });
                 }
             }
         }
@@ -623,12 +655,12 @@ pub inline fn deinterlace(
         if (chroma_row) {
             var x: usize = xx;
             while (x < w) : (x += 1) {
-                deinterlacePixelScalar(T, bits, true, true, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
+                deinterlacePixelScalar(T, bits, true, true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, undefined);
             }
         } else {
             var x: usize = xx;
             while (x < w) : (x += 1) {
-                deinterlacePixelScalar(T, bits, true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V);
+                deinterlacePixelScalar(T, bits, true, false, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, undefined);
             }
         }
     }

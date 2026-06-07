@@ -21,6 +21,14 @@ pub const CHROMA_LANES = 16;
 /// Chroma subsampling layout. The IT algorithm was designed for YV12
 /// (4:2:0); we extend it to 4:4:4 by routing all chroma rate/index
 /// expressions through a comptime tag.
+///
+/// PHASE 2 SCAFFOLDING — NOT YET WIRED. The `cs`-aware helpers below
+/// (`chromaHeight` / `chromaWidth(cs, …)` / `chromaCol` / `chromaLanesOf` /
+/// `sypChroma` / `dypChroma`) are unit-tested but referenced by no kernel
+/// yet: every kernel and `filter.validateInput` still hardcode 4:2:0, so
+/// `.yuv444` is rejected. They exist so the eventual 4:4:4 wiring touches one
+/// place. Until then they are intentionally unreferenced — `zig build`'s
+/// dead-code analysis tolerates `pub` decls, so this will not warn.
 pub const ChromaSampling = enum {
     yuv420, // subSamplingW=1, subSamplingH=1
     yuv444, // subSamplingW=0, subSamplingH=0

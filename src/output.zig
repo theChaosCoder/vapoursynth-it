@@ -30,8 +30,15 @@ inline fn bitblt(comptime T: type, dst: [*]T, src: [*]const T, row_size: usize) 
     @memcpy(dst[0..row_size], src[0..row_size]);
 }
 
-/// Y-plane row-size for `width`. Chroma is `width >> subSamplingW`; for
-/// YUV420 that's `width / 2`.
+/// Chroma row-size for `width`, **4:2:0-hardcoded** (`width / 2`).
+///
+/// Local to the output stage, which assumes 4:2:0 throughout (chroma indices
+/// `>> 1`, the YV12 field-interleave in `plane.syp`, the `@mod(y>>1, 2)`
+/// field gating, …). This is deliberately NOT `plane.chromaWidth(cs, …)`:
+/// when 4:4:4 lands (Phase 2) the whole stage's chroma geometry should route
+/// through `plane.ChromaSampling` together, not just this one call. Kept
+/// distinct so the half-migrated state is obvious rather than a silent
+/// divergence from the `cs`-aware helper of the same name.
 inline fn chromaWidth(width: i32) i32 {
     return width >> 1;
 }

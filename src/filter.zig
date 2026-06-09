@@ -561,6 +561,7 @@ inline fn blendInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     blend_mod.blendFrames(
         T,
         bits,
+        .yuv420,
         inst.width,
         inst.height,
         kernel,

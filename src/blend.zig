@@ -93,6 +93,7 @@ pub fn SourceView(comptime T: type) type {
 pub fn blendFrames(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     kernel: Kernel,
@@ -108,12 +109,13 @@ pub fn blendFrames(
     std.debug.assert(@as(usize, @intCast(kernel.size)) == srcs.len);
     std.debug.assert(width <= MAX_WIDTH);
     const w: usize = @intCast(width);
-    const w_uv: usize = w / 2;
+    const w_uv: usize = @intCast(plane.chromaWidth(cs, width));
 
-    // Fixed at MAX_WIDTH (never reallocates); only the first `w`/`w_uv` are used.
+    // Fixed at MAX_WIDTH (never reallocates); only the first `w`/`w_uv` are
+    // used. Chroma buffers are full MAX_WIDTH so 4:4:4 (w_uv == w) fits.
     var buf_y: [MAX_WIDTH]u32 = undefined;
-    var buf_u: [MAX_WIDTH / 2]u32 = undefined;
-    var buf_v: [MAX_WIDTH / 2]u32 = undefined;
+    var buf_u: [MAX_WIDTH]u32 = undefined;
+    var buf_v: [MAX_WIDTH]u32 = undefined;
 
     var y: i32 = 0;
     while (y < height) : (y += 1) {
@@ -128,8 +130,8 @@ pub fn blendFrames(
             // or oversized value — better than silently `& 0xFF`-truncating.
             const wt: u32 = @intCast(kernel.weights[z]);
             const pS = plane.syp(srcs[z].y, srcs[z].y_stride, height, 0, y);
-            const pS_U = plane.syp(srcs[z].u, srcs[z].u_stride, height, 1, y);
-            const pS_V = plane.syp(srcs[z].v, srcs[z].v_stride, height, 2, y);
+            const pS_U = plane.sypChroma(cs, srcs[z].u, srcs[z].u_stride, height, y);
+            const pS_V = plane.sypChroma(cs, srcs[z].v, srcs[z].v_stride, height, y);
             var x: usize = 0;
             while (x < w) : (x += 1) {
                 buf_y[x] += @as(u32, pS[x]) * wt;
@@ -142,8 +144,8 @@ pub fn blendFrames(
         }
 
         const pD = plane.dyp(dst_y, dst_y_stride, height, 0, y);
-        const pD_U = plane.dyp(dst_u, dst_u_stride, height, 1, y);
-        const pD_V = plane.dyp(dst_v, dst_v_stride, height, 2, y);
+        const pD_U = plane.dypChroma(cs, dst_u, dst_u_stride, height, y);
+        const pD_V = plane.dypChroma(cs, dst_v, dst_v_stride, height, y);
         var x: usize = 0;
         while (x < w) : (x += 1) pD[x] = @intCast(buf_y[x] >> 8);
         var xu: usize = 0;
@@ -205,13 +207,100 @@ test "blendFrames: identical sources -> output equals source (u8)" {
         .v_stride = w / 2,
     };
     var sources = [_]SourceView(u8){ sv, sv, sv };
-    blendFrames(u8, 8, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
+    blendFrames(u8, 8, .yuv420, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
 
     // With identical sources whose weights sum to ~256, the output should be
     // ~equal to the source (rounding may differ by 1 LSB).
     for (dy) |v| try std.testing.expect(@abs(@as(i32, v) - 100) <= 1);
     for (du) |v| try std.testing.expect(@abs(@as(i32, v) - 80) <= 1);
     for (dv) |v| try std.testing.expect(@abs(@as(i32, v) - 200) <= 1);
+}
+
+test "blendFrames 4:4:4: full-res chroma blends every sample (u8)" {
+    // 4:4:4 chroma is full width*height. Every chroma sample must be blended
+    // (no unwritten rows from a too-small buffer or 4:2:0 dyp interleave).
+    const width: i32 = 16;
+    const height: i32 = 8;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const wh = w * h;
+
+    const yp = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(yp);
+    const up = try std.testing.allocator.alloc(u8, wh); // full-res chroma
+    defer std.testing.allocator.free(up);
+    const vp = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(vp);
+    const dy = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(dy);
+    const du = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(du);
+    const dv = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(dv);
+
+    @memset(yp, 100);
+    @memset(up, 80);
+    @memset(vp, 200);
+    @memset(dy, 0);
+    @memset(du, 0);
+    @memset(dv, 0);
+
+    const k = buildKernel(0);
+    const sv: SourceView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w, .v = vp.ptr, .v_stride = w };
+    var sources = [_]SourceView(u8){ sv, sv, sv };
+    blendFrames(u8, 8, .yuv444, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w, dv.ptr, w);
+
+    for (dy) |v| try std.testing.expect(@abs(@as(i32, v) - 100) <= 1);
+    for (du) |v| try std.testing.expect(@abs(@as(i32, v) - 80) <= 1); // every sample
+    for (dv) |v| try std.testing.expect(@abs(@as(i32, v) - 200) <= 1);
+}
+
+test "blendFrames 4:2:0: per-chroma-row gradient is row-preserved (identical sources)" {
+    // Identical sources + integer kernel -> output == source. A per-row chroma
+    // gradient means a read/write row-mapping bug (which uniform values hide)
+    // would scramble the gradient. Guards the syp/dypChroma(cs) row addressing.
+    const width: i32 = 16;
+    const height: i32 = 16;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const wh = w * h;
+    const w_uv = w / 2;
+    const h_uv = h / 2;
+    const wh_uv = w_uv * h_uv;
+
+    const yp = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(yp);
+    const up = try std.testing.allocator.alloc(u8, wh_uv);
+    defer std.testing.allocator.free(up);
+    const vp = try std.testing.allocator.alloc(u8, wh_uv);
+    defer std.testing.allocator.free(vp);
+    const du = try std.testing.allocator.alloc(u8, wh_uv);
+    defer std.testing.allocator.free(du);
+    const dv = try std.testing.allocator.alloc(u8, wh_uv);
+    defer std.testing.allocator.free(dv);
+    const dy = try std.testing.allocator.alloc(u8, wh);
+    defer std.testing.allocator.free(dy);
+
+    @memset(yp, 100);
+    @memset(vp, 50);
+    @memset(dy, 0);
+    @memset(du, 0);
+    @memset(dv, 0);
+    // Vertical gradient in U: chroma row r holds 10 + r*20.
+    var r: usize = 0;
+    while (r < h_uv) : (r += 1) @memset(up[r * w_uv ..][0..w_uv], @intCast(10 + r * 20));
+
+    const k = buildKernel(0);
+    const sv: SourceView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w_uv, .v = vp.ptr, .v_stride = w_uv };
+    var sources = [_]SourceView(u8){ sv, sv, sv };
+    blendFrames(u8, 8, .yuv420, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w_uv, dv.ptr, w_uv);
+
+    // Each chroma row must come back as its own gradient value (row-preserving).
+    r = 0;
+    while (r < h_uv) : (r += 1) {
+        const expected: i32 = @intCast(10 + r * 20);
+        for (du[r * w_uv ..][0..w_uv]) |v| try std.testing.expect(@abs(@as(i32, v) - expected) <= 1);
+    }
 }
 
 test "blendFrames: u16 path identical sources" {
@@ -252,7 +341,7 @@ test "blendFrames: u16 path identical sources" {
         .v_stride = w / 2,
     };
     var sources = [_]SourceView(u16){ sv, sv, sv };
-    blendFrames(u16, 12, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
+    blendFrames(u16, 12, .yuv420, width, height, k, sources[0..@intCast(k.size)], dy.ptr, w, du.ptr, w / 2, dv.ptr, w / 2);
 
     for (dy) |v| try std.testing.expect(@abs(@as(i32, v) - 4000) <= 2);
     for (du) |v| try std.testing.expect(@abs(@as(i32, v) - 1000) <= 2);

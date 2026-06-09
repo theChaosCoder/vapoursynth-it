@@ -939,6 +939,9 @@ inline fn drawPrevFrame(comptime T: type, comptime bits: u8, inst: *Filter, zapi
 // ---------------------------------------------------------------------------
 
 pub fn validateInput(vi: *const vs.VideoInfo) ?[:0]const u8 {
+    if (vi.numFrames <= 0) {
+        return "IT: clip must have a known/finite number of frames";
+    }
     if (vi.format.colorFamily != .YUV or vi.format.sampleType != .Integer) {
         return "IT: only integer YUV input supported";
     }

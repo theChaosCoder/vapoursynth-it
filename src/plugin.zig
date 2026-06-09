@@ -62,6 +62,22 @@ test "validateInput rejects non-YUV420P8" {
     try std.testing.expect(filter.validateInput(&vi) != null);
 }
 
+test "validateInput rejects unknown/zero frames" {
+    var fmt = std.mem.zeroes(vs.VideoFormat);
+    fmt.colorFamily = .YUV;
+    fmt.sampleType = .Integer;
+    fmt.bitsPerSample = 8;
+    fmt.subSamplingW = 1;
+    fmt.subSamplingH = 1;
+    fmt.numPlanes = 3;
+    var vi = std.mem.zeroes(vs.VideoInfo);
+    vi.format = fmt;
+    vi.width = 720;
+    vi.height = 480;
+    vi.numFrames = 0;
+    try std.testing.expect(filter.validateInput(&vi) != null);
+}
+
 test "validateInput accepts YUV420P8 720x480" {
     var fmt = std.mem.zeroes(vs.VideoFormat);
     fmt.colorFamily = .YUV;

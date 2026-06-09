@@ -323,6 +323,7 @@ fn LumaScores(comptime T: type) type {
 inline fn deinterlacePixelScalar(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     comptime write_luma: bool,
     comptime write_chroma: bool,
     comptime luma_precomp: bool,
@@ -337,7 +338,7 @@ inline fn deinterlacePixelScalar(
     pD_V: [*]T,
     precomp: LumaScores(T),
 ) void {
-    const xh = x >> 1;
+    const xh = plane.chromaCol(cs, x);
     const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
     const iv_th: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
 
@@ -452,6 +453,7 @@ inline fn deinterlacePixelScalar(
 pub inline fn deinterlace(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     motion4di: []const u8,
@@ -465,7 +467,7 @@ pub inline fn deinterlace(
     std.debug.assert(motion4di.len == w * h);
 
     const row_y: usize = w;
-    const row_uv: usize = w / 2;
+    const row_uv: usize = @intCast(plane.chromaWidth(cs, width));
     const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
     const ShiftT = std.math.Log2Int(Wide);
     const iv_th_val: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
@@ -481,48 +483,49 @@ pub inline fn deinterlace(
         const pB = plane.syp(src_c.y, src_c.y_stride, height, 0, y + 1);
         const pP = plane.syp(src_p.y, src_p.y_stride, height, 0, y);
         const pN = plane.syp(src_n.y, src_n.y_stride, height, 0, y);
-        const pT_U = plane.syp(src_c.u, src_c.u_stride, height, 1, y - 1);
-        const pC_U = plane.syp(src_c.u, src_c.u_stride, height, 1, y);
-        const pB_U = plane.syp(src_c.u, src_c.u_stride, height, 1, y + 1);
-        const pP_U = plane.syp(src_p.u, src_p.u_stride, height, 1, y);
-        const pN_U = plane.syp(src_n.u, src_n.u_stride, height, 1, y);
-        const pT_V = plane.syp(src_c.v, src_c.v_stride, height, 2, y - 1);
-        const pC_V = plane.syp(src_c.v, src_c.v_stride, height, 2, y);
-        const pB_V = plane.syp(src_c.v, src_c.v_stride, height, 2, y + 1);
-        const pP_V = plane.syp(src_p.v, src_p.v_stride, height, 2, y);
-        const pN_V = plane.syp(src_n.v, src_n.v_stride, height, 2, y);
+        const pT_U = plane.sypChroma(cs, src_c.u, src_c.u_stride, height, y - 1);
+        const pC_U = plane.sypChroma(cs, src_c.u, src_c.u_stride, height, y);
+        const pB_U = plane.sypChroma(cs, src_c.u, src_c.u_stride, height, y + 1);
+        const pP_U = plane.sypChroma(cs, src_p.u, src_p.u_stride, height, y);
+        const pN_U = plane.sypChroma(cs, src_n.u, src_n.u_stride, height, y);
+        const pT_V = plane.sypChroma(cs, src_c.v, src_c.v_stride, height, y - 1);
+        const pC_V = plane.sypChroma(cs, src_c.v, src_c.v_stride, height, y);
+        const pB_V = plane.sypChroma(cs, src_c.v, src_c.v_stride, height, y + 1);
+        const pP_V = plane.sypChroma(cs, src_p.v, src_p.v_stride, height, y);
+        const pN_V = plane.sypChroma(cs, src_n.v, src_n.v_stride, height, y);
 
         const mT_row: usize = @intCast(plane.clipY(y - 1, height));
         const mB_row: usize = @intCast(plane.clipY(y + 1, height));
         const pmMT = motion4di[mT_row * w ..][0..w];
         const pmMB = motion4di[mB_row * w ..][0..w];
 
+        // 4:2:0 carries chroma on every other luma-pair; 4:2:2/4:4:4 every pair.
+        const chroma_row = if (plane.subH(cs)) (@mod(y >> 1, 2) != 0) else true;
+
         // Top field (y_top = yy = y^1) just gets copied straight through.
         const pD_top = plane.dyp(dst.y, dst.y_stride, height, 0, y ^ 1);
         const pSC_top = plane.syp(src_c.y, src_c.y_stride, height, 0, y ^ 1);
         @memcpy(pD_top[0..row_y], pSC_top[0..row_y]);
-        if (@mod(y >> 1, 2) != 0) {
-            const pD_top_U = plane.dyp(dst.u, dst.u_stride, height, 1, y ^ 1);
-            const pSC_top_U = plane.syp(src_c.u, src_c.u_stride, height, 1, y ^ 1);
-            const pD_top_V = plane.dyp(dst.v, dst.v_stride, height, 2, y ^ 1);
-            const pSC_top_V = plane.syp(src_c.v, src_c.v_stride, height, 2, y ^ 1);
+        if (chroma_row) {
+            const pD_top_U = plane.dypChroma(cs, dst.u, dst.u_stride, height, y ^ 1);
+            const pSC_top_U = plane.sypChroma(cs, src_c.u, src_c.u_stride, height, y ^ 1);
+            const pD_top_V = plane.dypChroma(cs, dst.v, dst.v_stride, height, y ^ 1);
+            const pSC_top_V = plane.sypChroma(cs, src_c.v, src_c.v_stride, height, y ^ 1);
             @memcpy(pD_top_U[0..row_uv], pSC_top_U[0..row_uv]);
             @memcpy(pD_top_V[0..row_uv], pSC_top_V[0..row_uv]);
         }
 
         const pD = plane.dyp(dst.y, dst.y_stride, height, 0, y);
-        const pD_U = plane.dyp(dst.u, dst.u_stride, height, 1, y);
-        const pD_V = plane.dyp(dst.v, dst.v_stride, height, 2, y);
+        const pD_U = plane.dypChroma(cs, dst.u, dst.u_stride, height, y);
+        const pD_V = plane.dypChroma(cs, dst.v, dst.v_stride, height, y);
 
         const y_rows: Iv5Rows(T) = .{ .t = pT, .c = pC, .b = pB, .p = pP, .n = pN };
         const u_rows: Iv5Rows(T) = .{ .t = pT_U, .c = pC_U, .b = pB_U, .p = pP_U, .n = pN_U };
         const v_rows: Iv5Rows(T) = .{ .t = pT_V, .c = pC_V, .b = pB_V, .p = pP_V, .n = pN_V };
-        const chroma_row = @mod(y >> 1, 2) != 0;
 
         // SIMD body for luma: 256-bit width = 32 u8 lanes / 16 u16 lanes per
         // luma block, chroma half.
         const LL: usize = 32 / @sizeOf(T);
-        const LC = LL / 2;
         const ivk_th: @Vector(LL, T) = @splat(iv_th_val);
         const motion_th: @Vector(LL, u8) = @splat(12);
         var xx: usize = 0;
@@ -543,54 +546,70 @@ pub inline fn deinterlace(
             const ivcp_l_v = ivKernelVec(LL, cp_v, v_t, v_b);
             const ivcn_l_v = ivKernelVec(LL, cn_v, v_t, v_b);
 
-            // Chroma scores: process LC chroma samples for each plane
-            const xhh = xx >> 1;
-            const u_t = simd.load(LC, pT_U, xhh);
-            const u_c = simd.load(LC, pC_U, xhh);
-            const u_b = simd.load(LC, pB_U, xhh);
-            const u_p = simd.load(LC, pP_U, xhh);
-            const u_n = simd.load(LC, pN_U, xhh);
-            const v_t_v = simd.load(LC, pT_V, xhh);
-            const v_c_v = simd.load(LC, pC_V, xhh);
-            const v_b_v = simd.load(LC, pB_V, xhh);
-            const v_p_v = simd.load(LC, pP_V, xhh);
-            const v_n_v = simd.load(LC, pN_V, xhh);
-
-            const ivc_u_s = ivKernelVec(LC, u_c, u_t, u_b);
-            const ivc_v_s = ivKernelVec(LC, v_c_v, v_t_v, v_b_v);
-            const ivp_u_s = ivKernelVec(LC, u_p, u_t, u_b);
-            const ivp_v_s = ivKernelVec(LC, v_p_v, v_t_v, v_b_v);
-            const ivn_u_s = ivKernelVec(LC, u_n, u_t, u_b);
-            const ivn_v_s = ivKernelVec(LC, v_n_v, v_t_v, v_b_v);
-            const cp_u = simd.pavgb(LC, u_c, u_p);
-            const cp_v_c = simd.pavgb(LC, v_c_v, v_p_v);
-            const cn_u = simd.pavgb(LC, u_c, u_n);
-            const cn_v_c = simd.pavgb(LC, v_c_v, v_n_v);
-            const ivcp_u_s = ivKernelVec(LC, cp_u, u_t, u_b);
-            const ivcp_v_s = ivKernelVec(LC, cp_v_c, v_t_v, v_b_v);
-            const ivcn_u_s = ivKernelVec(LC, cn_u, u_t, u_b);
-            const ivcn_v_s = ivKernelVec(LC, cn_v_c, v_t_v, v_b_v);
-
-            // max(U, V) per chroma byte
-            const ivc_uv_c = @max(ivc_u_s, ivc_v_s);
-            const ivp_uv_c = @max(ivp_u_s, ivp_v_s);
-            const ivn_uv_c = @max(ivn_u_s, ivn_v_s);
-            const ivcp_uv_c = @max(ivcp_u_s, ivcp_v_s);
-            const ivcn_uv_c = @max(ivcn_u_s, ivcn_v_s);
-
-            // Broadcast chroma scores to luma pairs
-            const ivc_uv_v = simd.expandPairs(LC, ivc_uv_c);
-            const ivp_uv_v = simd.expandPairs(LC, ivp_uv_c);
-            const ivn_uv_v = simd.expandPairs(LC, ivn_uv_c);
-            const ivcp_uv_v = simd.expandPairs(LC, ivcp_uv_c);
-            const ivcn_uv_v = simd.expandPairs(LC, ivcn_uv_c);
+            // Chroma IV scores broadcast to luma resolution. Half-rate chroma
+            // (4:2:0/4:2:2) computes LL/2 scores at xx>>1 and expandPairs up to
+            // LL; full-rate chroma (4:4:4) computes LL scores at xx directly.
+            const ChromaUV = struct {
+                c: @Vector(LL, T),
+                p: @Vector(LL, T),
+                n: @Vector(LL, T),
+                cp: @Vector(LL, T),
+                cn: @Vector(LL, T),
+            };
+            const uv: ChromaUV = if (plane.subW(cs)) blk: {
+                const LC = LL / 2;
+                const xhh = xx >> 1;
+                const u_t = simd.load(LC, pT_U, xhh);
+                const u_c = simd.load(LC, pC_U, xhh);
+                const u_b = simd.load(LC, pB_U, xhh);
+                const u_p = simd.load(LC, pP_U, xhh);
+                const u_n = simd.load(LC, pN_U, xhh);
+                const vt = simd.load(LC, pT_V, xhh);
+                const vc = simd.load(LC, pC_V, xhh);
+                const vb = simd.load(LC, pB_V, xhh);
+                const vp = simd.load(LC, pP_V, xhh);
+                const vn = simd.load(LC, pN_V, xhh);
+                const cp_u = simd.pavgb(LC, u_c, u_p);
+                const cn_u = simd.pavgb(LC, u_c, u_n);
+                const cp_vv = simd.pavgb(LC, vc, vp);
+                const cn_vv = simd.pavgb(LC, vc, vn);
+                break :blk .{
+                    .c = simd.expandPairs(LC, @max(ivKernelVec(LC, u_c, u_t, u_b), ivKernelVec(LC, vc, vt, vb))),
+                    .p = simd.expandPairs(LC, @max(ivKernelVec(LC, u_p, u_t, u_b), ivKernelVec(LC, vp, vt, vb))),
+                    .n = simd.expandPairs(LC, @max(ivKernelVec(LC, u_n, u_t, u_b), ivKernelVec(LC, vn, vt, vb))),
+                    .cp = simd.expandPairs(LC, @max(ivKernelVec(LC, cp_u, u_t, u_b), ivKernelVec(LC, cp_vv, vt, vb))),
+                    .cn = simd.expandPairs(LC, @max(ivKernelVec(LC, cn_u, u_t, u_b), ivKernelVec(LC, cn_vv, vt, vb))),
+                };
+            } else blk: {
+                const u_t = simd.load(LL, pT_U, xx);
+                const u_c = simd.load(LL, pC_U, xx);
+                const u_b = simd.load(LL, pB_U, xx);
+                const u_p = simd.load(LL, pP_U, xx);
+                const u_n = simd.load(LL, pN_U, xx);
+                const vt = simd.load(LL, pT_V, xx);
+                const vc = simd.load(LL, pC_V, xx);
+                const vb = simd.load(LL, pB_V, xx);
+                const vp = simd.load(LL, pP_V, xx);
+                const vn = simd.load(LL, pN_V, xx);
+                const cp_u = simd.pavgb(LL, u_c, u_p);
+                const cn_u = simd.pavgb(LL, u_c, u_n);
+                const cp_vv = simd.pavgb(LL, vc, vp);
+                const cn_vv = simd.pavgb(LL, vc, vn);
+                break :blk .{
+                    .c = @max(ivKernelVec(LL, u_c, u_t, u_b), ivKernelVec(LL, vc, vt, vb)),
+                    .p = @max(ivKernelVec(LL, u_p, u_t, u_b), ivKernelVec(LL, vp, vt, vb)),
+                    .n = @max(ivKernelVec(LL, u_n, u_t, u_b), ivKernelVec(LL, vn, vt, vb)),
+                    .cp = @max(ivKernelVec(LL, cp_u, u_t, u_b), ivKernelVec(LL, cp_vv, vt, vb)),
+                    .cn = @max(ivKernelVec(LL, cn_u, u_t, u_b), ivKernelVec(LL, cn_vv, vt, vb)),
+                };
+            };
 
             // Combined luma+chroma per-pixel scores
-            const ivc_v = @max(ivc_l_v, ivc_uv_v);
-            var ivp_v_ = @max(ivp_l_v, ivp_uv_v);
-            var ivn_v_ = @max(ivn_l_v, ivn_uv_v);
-            const ivcp_v_ = @max(ivcp_l_v, ivcp_uv_v);
-            const ivcn_v_ = @max(ivcn_l_v, ivcn_uv_v);
+            const ivc_v = @max(ivc_l_v, uv.c);
+            var ivp_v_ = @max(ivp_l_v, uv.p);
+            var ivn_v_ = @max(ivn_l_v, uv.n);
+            const ivcp_v_ = @max(ivcp_l_v, uv.cp);
+            const ivcn_v_ = @max(ivcn_l_v, uv.cn);
 
             // Candidate pixels (luma side)
             var pix_p_v = v_p;
@@ -639,7 +658,7 @@ pub inline fn deinterlace(
                 var xc = xx;
                 while (xc < xx + LL) : (xc += 1) {
                     const lane = xc - xx;
-                    deinterlacePixelScalar(T, bits, false, true, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, .{
+                    deinterlacePixelScalar(T, bits, cs, false, true, true, xc, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, .{
                         .ivc = ivc_a[lane],
                         .ivp = ivp_a[lane],
                         .ivn = ivn_a[lane],
@@ -654,12 +673,12 @@ pub inline fn deinterlace(
         if (chroma_row) {
             var x: usize = xx;
             while (x < w) : (x += 1) {
-                deinterlacePixelScalar(T, bits, true, true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, undefined);
+                deinterlacePixelScalar(T, bits, cs, true, true, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, undefined);
             }
         } else {
             var x: usize = xx;
             while (x < w) : (x += 1) {
-                deinterlacePixelScalar(T, bits, true, false, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, undefined);
+                deinterlacePixelScalar(T, bits, cs, true, false, false, x, y_rows, u_rows, v_rows, pmMT, pmMB, pD, pD_U, pD_V, undefined);
             }
         }
     }
@@ -984,4 +1003,43 @@ test "deintOneField 4:4:4: full-res chroma path compiles and field-copies sanely
     // Full-res chroma: flat in -> flat out (top copied, bottom = pavgb(100,100)).
     for (p[7]) |x| try std.testing.expectEqual(@as(u8, 100), x);
     for (p[8]) |x| try std.testing.expectEqual(@as(u8, 100), x);
+}
+
+test "deinterlace 4:4:4: full-res chroma path compiles and is sane on a flat clip" {
+    // Flat input + zero motion -> every IV score 0, no draw override -> output
+    // equals the (flat) input. Compiles the !subW SIMD chroma-score branch so a
+    // transcription error there surfaces before runtime dispatch.
+    const width: i32 = 48;
+    const height: i32 = 16;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const p = [_][]u8{
+        try std.testing.allocator.alloc(u8, w * h), // 0 src_p Y
+        try std.testing.allocator.alloc(u8, w * h), // 1 src_p U
+        try std.testing.allocator.alloc(u8, w * h), // 2 src_p V
+        try std.testing.allocator.alloc(u8, w * h), // 3 src_c Y
+        try std.testing.allocator.alloc(u8, w * h), // 4 src_c U
+        try std.testing.allocator.alloc(u8, w * h), // 5 src_c V
+        try std.testing.allocator.alloc(u8, w * h), // 6 src_n Y
+        try std.testing.allocator.alloc(u8, w * h), // 7 src_n U
+        try std.testing.allocator.alloc(u8, w * h), // 8 src_n V
+        try std.testing.allocator.alloc(u8, w * h), // 9 dst Y
+        try std.testing.allocator.alloc(u8, w * h), // 10 dst U
+        try std.testing.allocator.alloc(u8, w * h), // 11 dst V
+        try std.testing.allocator.alloc(u8, w * h), // 12 motion4di
+    };
+    defer for (p) |b| std.testing.allocator.free(b);
+    for (p[0..9]) |b| @memset(b, 100); // flat src (p/c/n)
+    for (p[9..12]) |b| @memset(b, 0); // dst
+    @memset(p[12], 0); // zero motion -> no draw override
+
+    const dst: plane.PlaneViewMut(u8) = .{ .y = p[9].ptr, .y_stride = w, .u = p[10].ptr, .u_stride = w, .v = p[11].ptr, .v_stride = w };
+    const src_p: plane.PlaneView(u8) = .{ .y = p[0].ptr, .y_stride = w, .u = p[1].ptr, .u_stride = w, .v = p[2].ptr, .v_stride = w };
+    const src_c: plane.PlaneView(u8) = .{ .y = p[3].ptr, .y_stride = w, .u = p[4].ptr, .u_stride = w, .v = p[5].ptr, .v_stride = w };
+    const src_n: plane.PlaneView(u8) = .{ .y = p[6].ptr, .y_stride = w, .u = p[7].ptr, .u_stride = w, .v = p[8].ptr, .v_stride = w };
+    deinterlace(u8, 8, .yuv444, width, height, p[12], &dst, &src_p, &src_c, &src_n);
+
+    for (p[9]) |x| try std.testing.expectEqual(@as(u8, 100), x); // Y
+    for (p[10]) |x| try std.testing.expectEqual(@as(u8, 100), x); // U full-res
+    for (p[11]) |x| try std.testing.expectEqual(@as(u8, 100), x); // V full-res
 }

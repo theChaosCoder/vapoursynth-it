@@ -798,7 +798,7 @@ inline fn deinterlaceInto(comptime T: type, comptime bits: u8, inst: *Filter, za
     motion_mod.makeMotionMap2Min(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
 
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.deinterlace(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
+    output_mod.deinterlace(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
 }
 
 /// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds

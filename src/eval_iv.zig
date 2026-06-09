@@ -370,3 +370,36 @@ test "evalIv 4:4:4: interlaced striping flags pixels (full-rate chroma)" {
     try std.testing.expect(result.counter > 0);
     try std.testing.expect(result.counterp >= result.counter);
 }
+
+test "evalIv 4:2:2: interlaced striping flags pixels (half-width, full-height chroma)" {
+    // Direct end-to-end coverage of evalIv with cs=.yuv422: the subW body plus
+    // sypChroma(.yuv422) full-height (1:1 row) chroma addressing together (so
+    // far only covered transitively via the 4:2:0 tests + the plane.zig test).
+    const width: i32 = 64;
+    const height: i32 = 48;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const cw = w / 2; // 4:2:2 chroma: half width, full height
+    const yp = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(yp);
+    const up = try std.testing.allocator.alloc(u8, cw * h);
+    defer std.testing.allocator.free(up);
+    const vp = try std.testing.allocator.alloc(u8, cw * h);
+    defer std.testing.allocator.free(vp);
+    const edge = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(edge);
+
+    var r: usize = 0;
+    while (r < h) : (r += 1) {
+        const val: u8 = if (r & 1 == 0) 0 else 200;
+        @memset(yp[r * w ..][0..w], val);
+    }
+    @memset(up, 100);
+    @memset(vp, 100);
+    @memset(edge, 0);
+    edge_mod.makeDeMap(u8, 8, .yuv422, width, height, 0, edge, yp.ptr, w, up.ptr, cw, vp.ptr, cw);
+
+    const result = evalIv(u8, 8, .yuv422, width, height, 1_000_000, edge, yp.ptr, w, up.ptr, cw, vp.ptr, cw, yp.ptr, w, up.ptr, cw, vp.ptr, cw);
+    try std.testing.expect(result.counter > 0);
+    try std.testing.expect(result.counterp >= result.counter);
+}

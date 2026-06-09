@@ -14,10 +14,6 @@ const std = @import("std");
 /// `filter.validateInput`. Kept here so a future bump only touches one site.
 pub const MAX_WIDTH = 8192;
 
-/// SIMD chroma lane width used by the YV12 kernels in `edge.zig` and
-/// `motion.zig`. Luma packs at 2× (32 lanes) since YV12 chroma is half-rate.
-pub const CHROMA_LANES = 16;
-
 /// Chroma subsampling layout, parameterized over two **independent axes** so
 /// the YV12-designed kernels generalize to 4:2:2 and 4:4:4:
 ///   * `subW` (horizontal, subSamplingW): chroma is half-width — column
@@ -127,10 +123,6 @@ pub fn clipY(y: i32, height: i32) i32 {
     return @max(0, @min(height - 1, y));
 }
 
-pub fn clipYH(y: i32, height: i32) i32 {
-    return @max(0, @min(@divTrunc(height, 2) - 1, y));
-}
-
 /// Source y-pointer. Given a plane base pointer, stride and logical row,
 /// returns a pointer starting at the correct sample offset.
 ///
@@ -233,11 +225,6 @@ test "clipX / clipY clamp" {
     try std.testing.expectEqual(@as(i32, 0), clipX(-1, 720));
     try std.testing.expectEqual(@as(i32, 719), clipX(720, 720));
     try std.testing.expectEqual(@as(i32, 479), clipY(500, 480));
-}
-
-test "clipYH halves the height" {
-    try std.testing.expectEqual(@as(i32, 239), clipYH(300, 480));
-    try std.testing.expectEqual(@as(i32, 0), clipYH(-1, 480));
 }
 
 test "syp luma is just y * stride" {

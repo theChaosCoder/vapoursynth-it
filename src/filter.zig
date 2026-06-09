@@ -902,7 +902,7 @@ inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.deintOneField(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
+    output_mod.deintOneField(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
 }
 
 inline fn drawPrevFrame(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {

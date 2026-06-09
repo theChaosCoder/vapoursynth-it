@@ -78,6 +78,7 @@ pub inline fn copyCPNField(
 pub inline fn deintOneField(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     simple_blur: []const u8,
@@ -129,28 +130,35 @@ pub inline fn deintOneField(
     }
 
     const row_y: usize = w;
-    const row_uv: usize = w / 2;
+    const row_uv: usize = @intCast(plane.chromaWidth(cs, width));
+    // Same-field chroma vertical neighbour is 2 chroma rows down — y+4 in luma
+    // coords for half-height 4:2:0 chroma, y+2 for full-height 4:2:2 / 4:4:4.
+    const cbb_off: i32 = if (plane.subH(cs)) 4 else 2;
     y = 0;
     while (y < height) : (y += 2) {
         const pC = plane.syp(src.y, src.y_stride, height, 0, y);
         const pB = plane.syp(ref.y, ref.y_stride, height, 0, y + 1);
         const pBB = plane.syp(src.y, src.y_stride, height, 0, y + 2);
-        const pC_U = plane.syp(src.u, src.u_stride, height, 1, y);
-        const pBB_U = plane.syp(src.u, src.u_stride, height, 1, y + 4);
-        const pC_V = plane.syp(src.v, src.v_stride, height, 2, y);
-        const pBB_V = plane.syp(src.v, src.v_stride, height, 2, y + 4);
+        const pC_U = plane.sypChroma(cs, src.u, src.u_stride, height, y);
+        const pBB_U = plane.sypChroma(cs, src.u, src.u_stride, height, y + cbb_off);
+        const pC_V = plane.sypChroma(cs, src.v, src.v_stride, height, y);
+        const pBB_V = plane.sypChroma(cs, src.v, src.v_stride, height, y + cbb_off);
 
         const pDC = plane.dyp(dst.y, dst.y_stride, height, 0, y);
         const pDB = plane.dyp(dst.y, dst.y_stride, height, 0, y + 1);
-        const pDC_U = plane.dyp(dst.u, dst.u_stride, height, 1, y);
-        const pDB_U = plane.dyp(dst.u, dst.u_stride, height, 1, y + 1);
-        const pDC_V = plane.dyp(dst.v, dst.v_stride, height, 2, y);
-        const pDB_V = plane.dyp(dst.v, dst.v_stride, height, 2, y + 1);
+        const pDC_U = plane.dypChroma(cs, dst.u, dst.u_stride, height, y);
+        const pDB_U = plane.dypChroma(cs, dst.u, dst.u_stride, height, y + 1);
+        const pDC_V = plane.dypChroma(cs, dst.v, dst.v_stride, height, y);
+        const pDB_V = plane.dypChroma(cs, dst.v, dst.v_stride, height, y + 1);
+
+        // 4:2:0 carries chroma on every other luma-pair (half-height); the
+        // full-height samplings (4:2:2 / 4:4:4) carry it on every pair.
+        const write_chroma = if (plane.subH(cs)) (@mod(y >> 1, 2) != 0) else true;
 
         // Top luma row: straight copy from current
         @memcpy(pDC[0..row_y], pC[0..row_y]);
 
-        if (@mod(y >> 1, 2) != 0) {
+        if (write_chroma) {
             @memcpy(pDC_U[0..row_uv], pC_U[0..row_uv]);
             @memcpy(pDC_V[0..row_uv], pC_V[0..row_uv]);
         }
@@ -186,7 +194,7 @@ pub inline fn deintOneField(
             const need_blend = (fm_l == 1 or fm_c == 1 or fm_r == 1) or (fmB_l == 1 or fmB_c == 1 or fmB_r == 1);
             const blended: T = scalar.pavgb(pC[0], pBB[0]);
             pDB[0] = if (need_blend) blended else pB[0];
-            if (@mod(y >> 1, 2) != 0) {
+            if (write_chroma) {
                 pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
                 pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
             }
@@ -214,12 +222,12 @@ pub inline fn deintOneField(
             const result = @select(T, blend_mask, blended, b_v);
             simd.store(D_LANES, pDB, x, result);
 
-            // Chroma is unconditional (no need_blend dependency) — always
-            // the vertical pavgb. Process D_LANES/2 chroma samples per luma
-            // chunk so the indices stay aligned.
-            if (@mod(y >> 1, 2) != 0) {
-                const xh: usize = x >> 1;
-                const HC = D_LANES / 2;
+            // Chroma is unconditional (no need_blend dependency) — always the
+            // vertical pavgb. Half-rate chroma (4:2:0/4:2:2) does D_LANES/2
+            // samples at x>>1; full-rate (4:4:4) does D_LANES at x.
+            if (write_chroma) {
+                const xh: usize = plane.chromaCol(cs, x);
+                const HC = plane.chromaLanesOf(cs, D_LANES);
                 const pcu = simd.load(HC, pC_U, xh);
                 const pbu = simd.load(HC, pBB_U, xh);
                 simd.store(HC, pDB_U, xh, simd.pavgb(HC, pcu, pbu));
@@ -232,7 +240,7 @@ pub inline fn deintOneField(
         // Scalar tail
         while (x < w) : (x += 1) {
             const xi: isize = @intCast(x);
-            const x_half = x >> 1;
+            const x_half = plane.chromaCol(cs, x);
             const fm_l = fm_at(field_map_scratch, fm_base + xi - 1, buf_len);
             const fm_c = fm_at(field_map_scratch, fm_base + xi, buf_len);
             const fm_r = fm_at(field_map_scratch, fm_base + xi + 1, buf_len);
@@ -243,7 +251,7 @@ pub inline fn deintOneField(
             const blended: T = scalar.pavgb(pC[x], pBB[x]);
             pDB[x] = if (need_blend) blended else pB[x];
 
-            if (@mod(y >> 1, 2) != 0) {
+            if (write_chroma) {
                 pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
                 pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
             }
@@ -934,4 +942,46 @@ test "copyCPNField 4:4:4: chroma mirrors the luma field copy (full resolution)" 
         try std.testing.expectEqual(expected, planes[7][yy * w]); // U mirrors Y
         try std.testing.expectEqual(expected, planes[8][yy * w]); // V mirrors Y
     }
+}
+
+test "deintOneField 4:4:4: full-res chroma path compiles and field-copies sanely" {
+    // Zero maps -> need_blend=false everywhere -> luma top from src, bottom
+    // from ref; chroma is the (flat) vertical pavgb. Exercises the !subH/!subW
+    // branch so a transcription error surfaces before runtime dispatch.
+    const width: i32 = 32;
+    const height: i32 = 16;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const p = [_][]u8{
+        try std.testing.allocator.alloc(u8, w * h), // 0 src Y
+        try std.testing.allocator.alloc(u8, w * h), // 1 src U
+        try std.testing.allocator.alloc(u8, w * h), // 2 src V
+        try std.testing.allocator.alloc(u8, w * h), // 3 ref Y
+        try std.testing.allocator.alloc(u8, w * h), // 4 ref U
+        try std.testing.allocator.alloc(u8, w * h), // 5 ref V
+        try std.testing.allocator.alloc(u8, w * h), // 6 dst Y
+        try std.testing.allocator.alloc(u8, w * h), // 7 dst U
+        try std.testing.allocator.alloc(u8, w * h), // 8 dst V
+        try std.testing.allocator.alloc(u8, w * h), // 9 simple_blur
+        try std.testing.allocator.alloc(u8, w * h), // 10 motion2max
+        try std.testing.allocator.alloc(u8, w * h), // 11 field_map scratch
+    };
+    defer for (p) |b| std.testing.allocator.free(b);
+    @memset(p[0], 50); // src Y
+    @memset(p[3], 200); // ref Y
+    for ([_]usize{ 1, 2, 4, 5 }) |i| @memset(p[i], 100); // all chroma flat
+    for (p[6..12]) |b| @memset(b, 0); // dst + zero maps (-> no field-map tags)
+
+    const dst: plane.PlaneViewMut(u8) = .{ .y = p[6].ptr, .y_stride = w, .u = p[7].ptr, .u_stride = w, .v = p[8].ptr, .v_stride = w };
+    const src: plane.PlaneView(u8) = .{ .y = p[0].ptr, .y_stride = w, .u = p[1].ptr, .u_stride = w, .v = p[2].ptr, .v_stride = w };
+    const ref: plane.PlaneView(u8) = .{ .y = p[3].ptr, .y_stride = w, .u = p[4].ptr, .u_stride = w, .v = p[5].ptr, .v_stride = w };
+    deintOneField(u8, 8, .yuv444, width, height, p[9], p[10], p[11], &dst, &src, &ref);
+
+    // Luma: even rows copied from src (50), odd rows from ref (200, no blend).
+    try std.testing.expectEqual(@as(u8, 50), p[6][0]);
+    try std.testing.expectEqual(@as(u8, 200), p[6][1 * w]);
+    try std.testing.expectEqual(@as(u8, 50), p[6][2 * w]);
+    // Full-res chroma: flat in -> flat out (top copied, bottom = pavgb(100,100)).
+    for (p[7]) |x| try std.testing.expectEqual(@as(u8, 100), x);
+    for (p[8]) |x| try std.testing.expectEqual(@as(u8, 100), x);
 }

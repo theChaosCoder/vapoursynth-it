@@ -1,17 +1,26 @@
-"""Bit-exact comparison: Zig port vs API-4-ported upstream C++ reference.
+"""Golden-hash comparison: Zig port vs the upstream C++ reference's *canonical*
+output.
 
-This test is skipped when the upstream library is missing. To build it:
+The C reference plugin (`it.IT`, reference/vapoursynth-cpp-api4/libit.so) is
+NON-DETERMINISTIC: for identical input it emits 2-3 different outputs depending
+on accumulated VapourSynth core state (proven during the flake investigation —
+`num_threads=1` and a large cache do not fix it). zit.IT is provably
+deterministic (see test_determinism.py) and matches the C reference's canonical
+output when the reference is rendered in a clean, isolated state.
 
-    scripts/build_upstream_api4.sh
+So rather than comparing against the live (flaky) reference, this test compares
+zit against committed golden hashes captured from the C reference in isolation,
+where `zit == reference` was asserted at capture time. That keeps the "zit
+matches the upstream" guarantee while being fully deterministic — the live C
+comparison lives in the generator and is re-run only on demand:
 
-When present, every fixture/parameter combination must produce
-byte-identical output between `core.zit.IT` and `core.it.IT` — that's the
-strongest claim of the project.
+    uv run python scripts/gen_upstream_golden.py
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -23,10 +32,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import gen_testclip                              # noqa: E402
 
-UPSTREAM_PLUGIN = ROOT / "reference" / "vapoursynth-cpp-api4" / "libit.so"
+GOLDEN_PATH = Path(__file__).resolve().parent / "upstream_golden.json"
 
-# Same matrix the golden-hash test pins. Each entry must produce the same
-# bytes from both implementations.
+# Same matrix scripts/gen_upstream_golden.py captures — keep them in sync.
 PARAM_GRID = [
     ("constant_color",     30, 20, 75),
     ("constant_color",     24, 20, 75),
@@ -40,6 +48,10 @@ PARAM_GRID = [
     ("two_frame_telecine", 24, 40, 150),
 ]
 
+_GOLDEN: dict[str, list[str]] = (
+    json.loads(GOLDEN_PATH.read_text()) if GOLDEN_PATH.exists() else {}
+)
+
 
 def _hash(clip: vs.VideoNode, n: int) -> str:
     f = clip.get_frame(n)
@@ -49,31 +61,24 @@ def _hash(clip: vs.VideoNode, n: int) -> str:
     return h.hexdigest()
 
 
-@pytest.fixture(scope="session")
-def upstream_loaded(core):
-    if not UPSTREAM_PLUGIN.exists():
-        pytest.skip(
-            f"upstream reference not built ({UPSTREAM_PLUGIN}). "
-            f"Run scripts/build_upstream_api4.sh."
-        )
-    if not any(p.namespace == "it" for p in core.plugins()):
-        core.std.LoadPlugin(str(UPSTREAM_PLUGIN))
-    return core
-
-
 @pytest.mark.parametrize("fixture_name,fps,threshold,pthreshold", PARAM_GRID)
-def test_zig_matches_upstream(upstream_loaded, fixtures, fixture_name, fps, threshold, pthreshold):
-    src = fixtures[fixture_name]()
-    zig = upstream_loaded.zit.IT(src, fps=fps, threshold=threshold, pthreshold=pthreshold)
-    ref = upstream_loaded.it.IT(src, fps=fps, threshold=threshold, pthreshold=pthreshold)
-
-    assert zig.num_frames == ref.num_frames, (
-        f"frame count mismatch: zig={zig.num_frames} ref={ref.num_frames}"
+def test_zig_matches_golden(core, fixture_name, fps, threshold, pthreshold):
+    key = f"{fixture_name}-{fps}-{threshold}-{pthreshold}"
+    golden = _GOLDEN.get(key)
+    assert golden is not None, (
+        f"no golden for {key} — run `uv run python scripts/gen_upstream_golden.py`"
     )
-    mismatches: list[str] = []
-    for n in range(zig.num_frames):
-        zh = _hash(zig, n)
-        rh = _hash(ref, n)
-        if zh != rh:
-            mismatches.append(f"  frame {n:04d}: zig={zh} ref={rh}")
-    assert not mismatches, "\n".join(mismatches)
+    src = gen_testclip.FIXTURES[fixture_name]()
+    zig = core.zit.IT(src, fps=fps, threshold=threshold, pthreshold=pthreshold)
+
+    assert zig.num_frames == len(golden), (
+        f"{key}: frame count {zig.num_frames} != golden {len(golden)}"
+    )
+    mismatches = [
+        f"  frame {n:04d}: zig={zh} golden={golden[n]}"
+        for n in range(zig.num_frames)
+        if (zh := _hash(zig, n)) != golden[n]
+    ]
+    assert not mismatches, (
+        f"{key}: zit diverged from the golden reference:\n" + "\n".join(mismatches)
+    )

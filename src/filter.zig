@@ -858,7 +858,7 @@ inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.copyCPNField(T, bits, inst.width, inst.height, &vD, &vC, &vR);
+    output_mod.copyCPNField(T, bits, .yuv420, inst.width, inst.height, &vD, &vC, &vR);
 }
 
 inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {

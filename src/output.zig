@@ -30,33 +30,21 @@ inline fn bitblt(comptime T: type, dst: [*]T, src: [*]const T, row_size: usize) 
     @memcpy(dst[0..row_size], src[0..row_size]);
 }
 
-/// Chroma row-size for `width`, **4:2:0-hardcoded** (`width / 2`).
-///
-/// Local to the output stage, which assumes 4:2:0 throughout (chroma indices
-/// `>> 1`, the YV12 field-interleave in `plane.syp`, the `@mod(y>>1, 2)`
-/// field gating, …). This is deliberately NOT `plane.chromaWidth(cs, …)`:
-/// when 4:4:4 lands (Phase 2) the whole stage's chroma geometry should route
-/// through `plane.ChromaSampling` together, not just this one call. Kept
-/// distinct so the half-migrated state is obvious rather than a silent
-/// divergence from the `cs`-aware helper of the same name.
-inline fn chromaWidth(width: i32) i32 {
-    return width >> 1;
-}
-
 /// `CopyCPNField`. `src` is the current frame; `ref` is the chosen reference
 /// (= `src` when iUseFrame=='C', otherwise prev/next frame).
 pub inline fn copyCPNField(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     dst: *const plane.PlaneViewMut(T),
     src: *const plane.PlaneView(T),
     ref: *const plane.PlaneView(T),
 ) void {
-    _ = bits; // unused: pure copy / vertical average needs no bit-depth-scaled threshold; param kept for kernel-signature uniformity
+    _ = bits; // unused: pure field copy needs no bit-depth-scaled threshold
     const row_y: usize = @intCast(width);
-    const row_uv: usize = @intCast(chromaWidth(width));
+    const row_uv: usize = @intCast(plane.chromaWidth(cs, width));
 
     var yy: i32 = 0;
     while (yy < height) : (yy += 2) {
@@ -66,11 +54,14 @@ pub inline fn copyCPNField(
         bitblt(T, plane.dyp(dst.y, dst.y_stride, height, 0, yo), plane.syp(src.y, src.y_stride, height, 0, yo), row_y);
         bitblt(T, plane.dyp(dst.y, dst.y_stride, height, 0, y), plane.syp(ref.y, ref.y_stride, height, 0, y), row_y);
 
-        if (@mod(yy >> 1, 2) != 0) {
-            bitblt(T, plane.dyp(dst.u, dst.u_stride, height, 1, yo), plane.syp(src.u, src.u_stride, height, 1, yo), row_uv);
-            bitblt(T, plane.dyp(dst.u, dst.u_stride, height, 1, y), plane.syp(ref.u, ref.u_stride, height, 1, y), row_uv);
-            bitblt(T, plane.dyp(dst.v, dst.v_stride, height, 2, yo), plane.syp(src.v, src.v_stride, height, 2, yo), row_uv);
-            bitblt(T, plane.dyp(dst.v, dst.v_stride, height, 2, y), plane.syp(ref.v, ref.v_stride, height, 2, y), row_uv);
+        // Chroma: 4:2:0 (half-height, field-interleaved) carries it on every
+        // other luma-pair; 4:2:2 / 4:4:4 (full-height) carry it on every pair.
+        const write_chroma = if (plane.subH(cs)) (@mod(yy >> 1, 2) != 0) else true;
+        if (write_chroma) {
+            bitblt(T, plane.dypChroma(cs, dst.u, dst.u_stride, height, yo), plane.sypChroma(cs, src.u, src.u_stride, height, yo), row_uv);
+            bitblt(T, plane.dypChroma(cs, dst.u, dst.u_stride, height, y), plane.sypChroma(cs, ref.u, ref.u_stride, height, y), row_uv);
+            bitblt(T, plane.dypChroma(cs, dst.v, dst.v_stride, height, yo), plane.sypChroma(cs, src.v, src.v_stride, height, yo), row_uv);
+            bitblt(T, plane.dypChroma(cs, dst.v, dst.v_stride, height, y), plane.sypChroma(cs, ref.v, ref.v_stride, height, y), row_uv);
         }
     }
 }
@@ -857,7 +848,7 @@ test "copyCPNField: identical src and ref produce identical output" {
 
     const dst: plane.PlaneViewMut(u8) = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
     const view: plane.PlaneView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
-    copyCPNField(u8, 8, width, height, &dst, &view, &view);
+    copyCPNField(u8, 8, .yuv420, width, height, &dst, &view, &view);
 
     try std.testing.expectEqualSlices(u8, yp, dy);
     try std.testing.expectEqual(@as(u8, 100), du[2 * (w / 2) + 0]);
@@ -900,10 +891,47 @@ test "copyCPNField: bottom row uses ref, top row uses src" {
     const dst: plane.PlaneViewMut(u8) = .{ .y = dy.ptr, .y_stride = w, .u = du.ptr, .u_stride = w / 2, .v = dv.ptr, .v_stride = w / 2 };
     const src: plane.PlaneView(u8) = .{ .y = sy.ptr, .y_stride = w, .u = sub.ptr, .u_stride = w / 2, .v = svb.ptr, .v_stride = w / 2 };
     const ref: plane.PlaneView(u8) = .{ .y = ry.ptr, .y_stride = w, .u = rub.ptr, .u_stride = w / 2, .v = rvb.ptr, .v_stride = w / 2 };
-    copyCPNField(u8, 8, width, height, &dst, &src, &ref);
+    copyCPNField(u8, 8, .yuv420, width, height, &dst, &src, &ref);
 
     try std.testing.expectEqual(@as(u8, 0xAA), dy[0 * w + 0]);
     try std.testing.expectEqual(@as(u8, 0xAA), dy[2 * w + 0]);
     try std.testing.expectEqual(@as(u8, 0xBB), dy[1 * w + 0]);
     try std.testing.expectEqual(@as(u8, 0xBB), dy[3 * w + 0]);
+}
+
+test "copyCPNField 4:4:4: chroma mirrors the luma field copy (full resolution)" {
+    // At 4:4:4 chroma is full width*height and every row carries it (no
+    // @mod gating): top rows come from src, bottom rows from ref, for Y/U/V.
+    const width: i32 = 16;
+    const height: i32 = 8;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const planes = [_][]u8{
+        try std.testing.allocator.alloc(u8, w * h), // 0 src Y
+        try std.testing.allocator.alloc(u8, w * h), // 1 src U
+        try std.testing.allocator.alloc(u8, w * h), // 2 src V
+        try std.testing.allocator.alloc(u8, w * h), // 3 ref Y
+        try std.testing.allocator.alloc(u8, w * h), // 4 ref U
+        try std.testing.allocator.alloc(u8, w * h), // 5 ref V
+        try std.testing.allocator.alloc(u8, w * h), // 6 dst Y
+        try std.testing.allocator.alloc(u8, w * h), // 7 dst U
+        try std.testing.allocator.alloc(u8, w * h), // 8 dst V
+    };
+    defer for (planes) |p| std.testing.allocator.free(p);
+    for (planes[0..3]) |p| @memset(p, 0xAA); // src
+    for (planes[3..6]) |p| @memset(p, 0xBB); // ref
+    for (planes[6..9]) |p| @memset(p, 0);
+
+    const dst: plane.PlaneViewMut(u8) = .{ .y = planes[6].ptr, .y_stride = w, .u = planes[7].ptr, .u_stride = w, .v = planes[8].ptr, .v_stride = w };
+    const src: plane.PlaneView(u8) = .{ .y = planes[0].ptr, .y_stride = w, .u = planes[1].ptr, .u_stride = w, .v = planes[2].ptr, .v_stride = w };
+    const ref: plane.PlaneView(u8) = .{ .y = planes[3].ptr, .y_stride = w, .u = planes[4].ptr, .u_stride = w, .v = planes[5].ptr, .v_stride = w };
+    copyCPNField(u8, 8, .yuv444, width, height, &dst, &src, &ref);
+
+    var yy: usize = 0;
+    while (yy < h) : (yy += 1) {
+        const expected: u8 = if (yy % 2 == 0) 0xAA else 0xBB; // even=top=src, odd=bottom=ref
+        try std.testing.expectEqual(expected, planes[6][yy * w]); // Y
+        try std.testing.expectEqual(expected, planes[7][yy * w]); // U mirrors Y
+        try std.testing.expectEqual(expected, planes[8][yy * w]); // V mirrors Y
+    }
 }

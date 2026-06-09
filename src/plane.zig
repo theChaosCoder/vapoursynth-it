@@ -18,56 +18,60 @@ pub const MAX_WIDTH = 8192;
 /// `motion.zig`. Luma packs at 2× (32 lanes) since YV12 chroma is half-rate.
 pub const CHROMA_LANES = 16;
 
-/// Chroma subsampling layout. The IT algorithm was designed for YV12
-/// (4:2:0); we extend it to 4:4:4 by routing all chroma rate/index
-/// expressions through a comptime tag.
+/// Chroma subsampling layout, parameterized over two **independent axes** so
+/// the YV12-designed kernels generalize to 4:2:2 and 4:4:4:
+///   * `subW` (horizontal, subSamplingW): chroma is half-width — column
+///     `x>>1`, half SIMD lanes (+ `simd.expandPairs`). True for 4:2:0, 4:2:2.
+///   * `subH` (vertical, subSamplingH): chroma is half-height and
+///     field-interleaved — the `((y>>2)<<1)+(y%2)` row mapping plus per-pair
+///     write-gating. True only for 4:2:0.
+/// So 4:2:2 is exactly "4:2:0 horizontal × 4:4:4 vertical". Routing every
+/// chroma rate/index expression through these axes is what lets one code path
+/// serve all three samplings.
 ///
-/// PHASE 2 SCAFFOLDING — NOT YET WIRED. The `cs`-aware helpers below
-/// (`chromaHeight` / `chromaWidth(cs, …)` / `chromaCol` / `chromaLanesOf` /
-/// `sypChroma` / `dypChroma`) are unit-tested but referenced by no kernel
-/// yet: every kernel and `filter.validateInput` still hardcode 4:2:0, so
-/// `.yuv444` is rejected. They exist so the eventual 4:4:4 wiring touches one
-/// place. Until then they are intentionally unreferenced — `zig build`'s
-/// dead-code analysis tolerates `pub` decls, so this will not warn.
+/// WIRING IN PROGRESS — 4:4:4 first, then 4:2:2. Until `filter.validateInput`
+/// accepts a non-4:2:0 sampling and the kernels thread `cs` through, only
+/// 4:2:0 is reachable at runtime.
 pub const ChromaSampling = enum {
     yuv420, // subSamplingW=1, subSamplingH=1
+    yuv422, // subSamplingW=1, subSamplingH=0
     yuv444, // subSamplingW=0, subSamplingH=0
 };
 
+/// Horizontal chroma subsampling (`subSamplingW`): two adjacent luma columns
+/// share one chroma sample. True for 4:2:0 and 4:2:2.
+pub inline fn subW(comptime cs: ChromaSampling) bool {
+    return cs != .yuv444;
+}
+
+/// Vertical chroma subsampling (`subSamplingH`): chroma is half-height and
+/// field-interleaved. True only for 4:2:0.
+pub inline fn subH(comptime cs: ChromaSampling) bool {
+    return cs == .yuv420;
+}
+
 /// Chroma row count for a luma-pixel row count, given the sampling.
 pub inline fn chromaHeight(comptime cs: ChromaSampling, height: i32) i32 {
-    return switch (cs) {
-        .yuv420 => height >> 1,
-        .yuv444 => height,
-    };
+    return if (subH(cs)) height >> 1 else height;
 }
 
 /// Chroma sample count per luma row, given the sampling.
 pub inline fn chromaWidth(comptime cs: ChromaSampling, width: i32) i32 {
-    return switch (cs) {
-        .yuv420 => width >> 1,
-        .yuv444 => width,
-    };
+    return if (subW(cs)) width >> 1 else width;
 }
 
 /// Map a luma column index to the chroma column index for the same pixel.
-/// In 4:2:0 two adjacent luma pixels share one chroma sample; in 4:4:4 each
-/// luma pixel has its own.
+/// With horizontal subsampling two adjacent luma pixels share one chroma
+/// sample; otherwise each luma pixel has its own.
 pub inline fn chromaCol(comptime cs: ChromaSampling, x: usize) usize {
-    return switch (cs) {
-        .yuv420 => x >> 1,
-        .yuv444 => x,
-    };
+    return if (subW(cs)) x >> 1 else x;
 }
 
-/// SIMD chroma lane count per `luma_lanes`, given the sampling. For 4:2:0
-/// the chroma vector is half the luma vector (half-rate); for 4:4:4 it
-/// matches the luma vector.
+/// SIMD chroma lane count per `luma_lanes`, given the sampling. With
+/// horizontal subsampling the chroma vector is half the luma vector;
+/// otherwise it matches.
 pub inline fn chromaLanesOf(comptime cs: ChromaSampling, comptime luma_lanes: usize) usize {
-    return switch (cs) {
-        .yuv420 => luma_lanes / 2,
-        .yuv444 => luma_lanes,
-    };
+    return if (subW(cs)) luma_lanes / 2 else luma_lanes;
 }
 
 /// Read-only view of one frame's Y/U/V plane base pointers + strides.
@@ -171,10 +175,10 @@ pub fn dyp(
     return base + row * stride;
 }
 
-/// Subsampling-aware source y-pointer for chroma planes. For 4:2:0 falls
-/// back to the YV12 field-interleaved mapping; for 4:4:4 chroma rows
-/// match luma rows 1-to-1. Use this from chroma-aware kernels that need
-/// to support both samplings.
+/// Subsampling-aware source y-pointer for chroma planes. With vertical
+/// subsampling (4:2:0) it uses the YV12 field-interleaved mapping; without
+/// it (4:2:2 / 4:4:4) chroma rows match luma rows 1-to-1. Use this from
+/// chroma-aware kernels that need to support all samplings.
 pub fn sypChroma(
     comptime cs: ChromaSampling,
     base: anytype,
@@ -183,10 +187,10 @@ pub fn sypChroma(
     y: i32,
 ) @TypeOf(base) {
     const yi = clipY(y, height);
-    const row: usize = switch (cs) {
-        .yuv420 => @intCast(((yi >> 2) << 1) + @rem(yi, 2)),
-        .yuv444 => @intCast(yi),
-    };
+    const row: usize = if (subH(cs))
+        @intCast(((yi >> 2) << 1) + @rem(yi, 2))
+    else
+        @intCast(yi);
     return base + row * stride;
 }
 
@@ -199,10 +203,10 @@ pub fn dypChroma(
     y: i32,
 ) @TypeOf(base) {
     const yi = clipY(y, height);
-    const row: usize = switch (cs) {
-        .yuv420 => @intCast(((yi >> 2) << 1) + @rem(yi, 2)),
-        .yuv444 => @intCast(yi),
-    };
+    const row: usize = if (subH(cs))
+        @intCast(((yi >> 2) << 1) + @rem(yi, 2))
+    else
+        @intCast(yi);
     return base + row * stride;
 }
 
@@ -274,4 +278,26 @@ test "sypChroma 4:4:4 maps row 1-to-1 with luma" {
     const ptr: [*]const u8 = &buf;
     // 4:4:4: chroma row = luma row, no interleave.
     try std.testing.expectEqual(@as(u8, 0xCC), sypChroma(.yuv444, ptr, 720, 480, 5)[10]);
+}
+
+test "sypChroma 4:2:2 maps row 1-to-1 with luma (full height, no interleave)" {
+    var buf = [_]u8{0} ** (480 * 720);
+    buf[5 * 720 + 10] = 0xCC;
+    const ptr: [*]const u8 = &buf;
+    // 4:2:2 is vertically full-rate, so chroma row = luma row like 4:4:4.
+    try std.testing.expectEqual(@as(u8, 0xCC), sypChroma(.yuv422, ptr, 720, 480, 5)[10]);
+}
+
+test "chroma axes: subW/subH and rates per sampling" {
+    // Horizontal subsampling for 4:2:0 and 4:2:2, not 4:4:4.
+    try std.testing.expect(subW(.yuv420) and subW(.yuv422) and !subW(.yuv444));
+    // Vertical subsampling only for 4:2:0.
+    try std.testing.expect(subH(.yuv420) and !subH(.yuv422) and !subH(.yuv444));
+    // Width halved iff subW; height halved iff subH.
+    try std.testing.expectEqual(@as(i32, 360), chromaWidth(.yuv420, 720));
+    try std.testing.expectEqual(@as(i32, 360), chromaWidth(.yuv422, 720));
+    try std.testing.expectEqual(@as(i32, 720), chromaWidth(.yuv444, 720));
+    try std.testing.expectEqual(@as(i32, 240), chromaHeight(.yuv420, 480));
+    try std.testing.expectEqual(@as(i32, 480), chromaHeight(.yuv422, 480));
+    try std.testing.expectEqual(@as(i32, 480), chromaHeight(.yuv444, 480));
 }

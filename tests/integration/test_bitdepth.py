@@ -161,17 +161,31 @@ def test_high_bit_depth_matches_shifted_8bit(core, bits, vs_fmt, shift, params):
 # Layer 4: validation — invalid formats are rejected
 # ---------------------------------------------------------------------------
 
-def test_rejects_yuv422(core):
-    clip = core.std.BlankClip(format=vs.YUV422P8, width=128, height=96, length=10)
-    with pytest.raises(vs.Error, match="(subsampling|4:2:0|4:4:4)"):
-        core.zit.IT(clip)
+def test_accepts_yuv422(core):
+    """4:2:2 is supported: a flat clip stays flat across all planes, and an
+    interlaced clip runs the deinterlacer without error (no 4:2:2 oracle)."""
+    color = 110
+    out = core.zit.IT(_make_flat_clip(core, vs.YUV422P8, color))
+    f = out.get_frame(out.num_frames // 2)
+    assert all(abs(b - color) <= 1 for b in bytes(f[0])[:64]), "4:2:2 luma not flat"
+    assert all(abs(b - color) <= 1 for b in bytes(f[1])[:32]), "4:2:2 U not flat"
+    assert all(abs(b - color) <= 1 for b in bytes(f[2])[:32]), "4:2:2 V not flat"
+    stripes = _make_interlaced_stripes(core, vs.YUV422P8, 220, 20, length=20)
+    sf = core.zit.IT(stripes).get_frame(0)
+    assert all(0 <= b <= 255 for b in bytes(sf[0])[:128]), "4:2:2 interlaced out of range"
 
 
-def test_rejects_yuv444_for_now(core):
-    """YUV444 will arrive in Phase 2; until then validateInput must reject it."""
-    clip = core.std.BlankClip(format=vs.YUV444P8, width=128, height=96, length=10)
-    with pytest.raises(vs.Error, match="(subsampling|4:2:0|4:4:4)"):
-        core.zit.IT(clip)
+@pytest.mark.parametrize("dimode", [0, 1, 2, 3])
+def test_yuv444_planes_stay_equal(core, dimode):
+    """4:4:4 with U=V=Y in must give U=V=Y out: the chroma kernels process
+    identically to luma at full resolution, across every diMode path. (width
+    128 -> stride 128 -> no padding, so the plane bytes compare cleanly.)"""
+    clip = _make_interlaced_stripes(core, vs.YUV444P8, bright=220, dark=20, length=30)
+    out = core.zit.IT(clip, diMode=dimode)
+    for n in (0, out.num_frames // 2, out.num_frames - 1):
+        f = out.get_frame(n)
+        y, u, v = bytes(f[0]), bytes(f[1]), bytes(f[2])
+        assert y == u == v, f"diMode={dimode} frame={n}: 4:4:4 planes diverged"
 
 
 def test_rejects_9bit(core):

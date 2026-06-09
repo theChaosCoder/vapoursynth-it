@@ -195,8 +195,16 @@ pub inline fn deintOneField(
             const blended: T = scalar.pavgb(pC[0], pBB[0]);
             pDB[0] = if (need_blend) blended else pB[0];
             if (write_chroma) {
-                pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
-                pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
+                if (plane.subW(cs)) {
+                    pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
+                    pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
+                } else {
+                    // 4:4:4: chroma follows luma's per-pixel field-map decision.
+                    const pBref_U = plane.sypChroma(cs, ref.u, ref.u_stride, height, y + 1);
+                    const pBref_V = plane.sypChroma(cs, ref.v, ref.v_stride, height, y + 1);
+                    pDB_U[x_half] = if (need_blend) scalar.pavgb(pC_U[x_half], pBB_U[x_half]) else pBref_U[x_half];
+                    pDB_V[x_half] = if (need_blend) scalar.pavgb(pC_V[x_half], pBB_V[x_half]) else pBref_V[x_half];
+                }
             }
             x = 1;
         }
@@ -222,18 +230,27 @@ pub inline fn deintOneField(
             const result = @select(T, blend_mask, blended, b_v);
             simd.store(D_LANES, pDB, x, result);
 
-            // Chroma is unconditional (no need_blend dependency) — always the
-            // vertical pavgb. Half-rate chroma (4:2:0/4:2:2) does D_LANES/2
-            // samples at x>>1; full-rate (4:4:4) does D_LANES at x.
+            // Half-rate chroma (4:2:0/4:2:2): unconditional vertical pavgb,
+            // D_LANES/2 samples at x>>1. Full-rate chroma (4:4:4, 1:1 with
+            // luma): follows luma's per-pixel blend_mask, D_LANES samples at x.
             if (write_chroma) {
-                const xh: usize = plane.chromaCol(cs, x);
-                const HC = plane.chromaLanesOf(cs, D_LANES);
-                const pcu = simd.load(HC, pC_U, xh);
-                const pbu = simd.load(HC, pBB_U, xh);
-                simd.store(HC, pDB_U, xh, simd.pavgb(HC, pcu, pbu));
-                const pcv = simd.load(HC, pC_V, xh);
-                const pbv = simd.load(HC, pBB_V, xh);
-                simd.store(HC, pDB_V, xh, simd.pavgb(HC, pcv, pbv));
+                if (plane.subW(cs)) {
+                    const xh: usize = plane.chromaCol(cs, x);
+                    const HC = plane.chromaLanesOf(cs, D_LANES);
+                    const pcu = simd.load(HC, pC_U, xh);
+                    const pbu = simd.load(HC, pBB_U, xh);
+                    simd.store(HC, pDB_U, xh, simd.pavgb(HC, pcu, pbu));
+                    const pcv = simd.load(HC, pC_V, xh);
+                    const pbv = simd.load(HC, pBB_V, xh);
+                    simd.store(HC, pDB_V, xh, simd.pavgb(HC, pcv, pbv));
+                } else {
+                    const pBref_U = plane.sypChroma(cs, ref.u, ref.u_stride, height, y + 1);
+                    const pBref_V = plane.sypChroma(cs, ref.v, ref.v_stride, height, y + 1);
+                    const cu = simd.pavgb(D_LANES, simd.load(D_LANES, pC_U, x), simd.load(D_LANES, pBB_U, x));
+                    simd.store(D_LANES, pDB_U, x, @select(T, blend_mask, cu, simd.load(D_LANES, pBref_U, x)));
+                    const cv = simd.pavgb(D_LANES, simd.load(D_LANES, pC_V, x), simd.load(D_LANES, pBB_V, x));
+                    simd.store(D_LANES, pDB_V, x, @select(T, blend_mask, cv, simd.load(D_LANES, pBref_V, x)));
+                }
             }
         }
 
@@ -252,8 +269,15 @@ pub inline fn deintOneField(
             pDB[x] = if (need_blend) blended else pB[x];
 
             if (write_chroma) {
-                pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
-                pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
+                if (plane.subW(cs)) {
+                    pDB_U[x_half] = scalar.pavgb(pC_U[x_half], pBB_U[x_half]);
+                    pDB_V[x_half] = scalar.pavgb(pC_V[x_half], pBB_V[x_half]);
+                } else {
+                    const pBref_U = plane.sypChroma(cs, ref.u, ref.u_stride, height, y + 1);
+                    const pBref_V = plane.sypChroma(cs, ref.v, ref.v_stride, height, y + 1);
+                    pDB_U[x_half] = if (need_blend) scalar.pavgb(pC_U[x_half], pBB_U[x_half]) else pBref_U[x_half];
+                    pDB_V[x_half] = if (need_blend) scalar.pavgb(pC_V[x_half], pBB_V[x_half]) else pBref_V[x_half];
+                }
             }
         }
     }

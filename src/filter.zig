@@ -134,6 +134,10 @@ pub const Filter = struct {
     /// frame.
     bits: u8,
 
+    /// Chroma subsampling (4:2:0 / 4:2:2 / 4:4:4). Like `bits`, dispatched on
+    /// once per frame in `getFrame` and routed through kernels as comptime.
+    cs: plane.ChromaSampling,
+
     frame_info: []state.CFrameInfo,
     block_info: []state.CTFblockInfo,
     call_state: state.CallState,
@@ -198,6 +202,9 @@ pub const Filter = struct {
             .height = height,
             .max_frames = max_frames,
             .bits = @intCast(vi_src.format.bitsPerSample),
+            // validateInput guarantees 4:2:0 / 4:2:2 / 4:4:4, so this is
+            // exhaustive: W=0 -> 4:4:4, else H=0 -> 4:2:2, else 4:2:0.
+            .cs = if (vi_src.format.subSamplingW == 0) .yuv444 else if (vi_src.format.subSamplingH == 0) .yuv422 else .yuv420,
             .frame_info = frame_info,
             .block_info = block_info,
             .call_state = .{
@@ -349,10 +356,10 @@ fn getFrame(
     core: ?*vs.Core,
     vsapi: *const vs.API,
 ) callconv(.c) ?*const vs.Frame {
-    // The 4-way dispatch inlines the whole pixel pipeline four times; each
-    // SIMD helper's comptime branch (std.math.Log2Int, splat-type derivation)
-    // adds up well past the default 1000 budget.
-    @setEvalBranchQuota(200000);
+    // The bits×cs dispatch inlines the whole pixel pipeline 4×3 = 12 times;
+    // each SIMD helper's comptime branch (std.math.Log2Int, splat-type
+    // derivation) adds up well past the default 1000 budget.
+    @setEvalBranchQuota(600000);
     _ = frame_data;
     const inst: *Filter = @ptrCast(@alignCast(instance_data.?));
     const zapi = ZAPI.init(vsapi, core, frame_ctx);
@@ -366,15 +373,23 @@ fn getFrame(
     // Dispatch on the per-instance bit-depth to the comptime-specialised
     // pixel pipeline. validateInput guarantees `bits` is one of 8/10/12/16.
     return switch (inst.bits) {
-        8 => getFrameImpl(u8, 8, inst, &zapi, n),
-        10 => getFrameImpl(u16, 10, inst, &zapi, n),
-        12 => getFrameImpl(u16, 12, inst, &zapi, n),
-        16 => getFrameImpl(u16, 16, inst, &zapi, n),
+        8 => switch (inst.cs) {
+            inline else => |c| getFrameImpl(u8, 8, c, inst, &zapi, n),
+        },
+        10 => switch (inst.cs) {
+            inline else => |c| getFrameImpl(u16, 10, c, inst, &zapi, n),
+        },
+        12 => switch (inst.cs) {
+            inline else => |c| getFrameImpl(u16, 12, c, inst, &zapi, n),
+        },
+        16 => switch (inst.cs) {
+            inline else => |c| getFrameImpl(u16, 16, c, inst, &zapi, n),
+        },
         else => unreachable,
     };
 }
 
-inline fn getFrameImpl(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, n: i32) ?*const vs.Frame {
+fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32) ?*const vs.Frame {
     // Reset per-call scratch state
     inst.call_state.resetForFrame(n);
 
@@ -384,9 +399,9 @@ inline fn getFrameImpl(comptime T: type, comptime bits: u8, inst: *Filter, zapi:
     if (inst.fps == 24) {
         tf24 = n + @divTrunc(n, 4);
         base24 = @divTrunc(tf24, 5) * 5;
-        input_n = resolveInputFrame24(T, bits, inst, zapi, n);
+        input_n = resolveInputFrame24(T, bits, cs, inst, zapi, n);
     } else {
-        getFrameSub(T, bits, inst, zapi, n);
+        getFrameSub(T, bits, cs, inst, zapi, n);
     }
 
     // Fetch the chosen source frame ONCE for prop inheritance. Cached, so
@@ -400,10 +415,10 @@ inline fn getFrameImpl(comptime T: type, comptime bits: u8, inst: *Filter, zapi:
 
     var was_blended = false;
     if (inst.fps == 24 and shouldBlendBlock(inst, base24)) {
-        blendInto(T, bits, inst, zapi, dst, base24, tf24);
+        blendInto(T, bits, cs, inst, zapi, dst, base24, tf24);
         was_blended = true;
     } else {
-        makeOutput(T, bits, inst, zapi, dst, input_n);
+        makeOutput(T, bits, cs, inst, zapi, dst, input_n);
     }
 
     setOutputProps(inst, zapi, dst, input_n, was_blended);
@@ -530,7 +545,7 @@ fn shouldBlendBlock(inst: *Filter, base: i32) bool {
 
 /// `BlendFrame_YV12` analogue: render each source frame via MakeOutput,
 /// then run the temporal blend. Allocates `size` temporary VSFrames.
-inline fn blendInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, base: i32, tf_frame: i32) void {
+inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, base: i32, tf_frame: i32) void {
     const kernel = blend_mod.buildKernel(tf_frame - base);
     const size: usize = @intCast(kernel.size);
 
@@ -545,7 +560,7 @@ inline fn blendInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
         if (tmp_opt == null) return;
         const tmp = tmp_opt.?;
         temps[z] = tmp;
-        makeOutput(T, bits, inst, zapi, tmp, fno);
+        makeOutput(T, bits, cs, inst, zapi, tmp, fno);
         const v = viewOfMut(T, zapi, tmp);
         srcs[z] = .{
             .y = v.y,
@@ -561,7 +576,7 @@ inline fn blendInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     blend_mod.blendFrames(
         T,
         bits,
-        .yuv420,
+        cs,
         inst.width,
         inst.height,
         kernel,
@@ -575,13 +590,13 @@ inline fn blendInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     );
 }
 
-inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
+inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
     const tf = out_n + @divTrunc(out_n, 4);
     const base = @divTrunc(tf, 5) * 5;
 
     var i: i32 = 0;
     while (i < 5) : (i += 1) {
-        getFrameSub(T, bits, inst, zapi, base + i);
+        getFrameSub(T, bits, cs, inst, zapi, base + i);
     }
     decide_mod.decide(base, inst.width, inst.height, inst.max_frames, inst.frame_info, inst.block_info);
 
@@ -611,7 +626,7 @@ inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, inst: *Filter
 // GetFrameSub — compute and cache match decision for one input frame.
 // ---------------------------------------------------------------------------
 
-inline fn getFrameSub(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, n: i32) void {
+inline fn getFrameSub(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32) void {
     if (n >= inst.max_frames) return;
     if (inst.frame_info[@intCast(n)].ip != 'U') return;
 
@@ -627,7 +642,7 @@ inline fn getFrameSub(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
     // their `width * height` defaults so every frame ends up ip='I' and is
     // dispatched to the deinterlacer of choice. Matches Avisynth original.
     if (inst.ref != .none) {
-        chooseBest(T, bits, inst, zapi, n);
+        chooseBest(T, bits, cs, inst, zapi, n);
     }
 
     const ni: usize = @intCast(n);
@@ -662,7 +677,7 @@ inline fn getFrameSub(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
 // ChooseBest — populate edge map, run EvalIV against C and P, pick best.
 // ---------------------------------------------------------------------------
 
-inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, n: i32) void {
+inline fn chooseBest(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
     const vC = viewOf(T, zapi, srcC);
@@ -672,11 +687,11 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
 
     // Even rows of edge map: from srcC at offset 0.
     @memset(inst.call_state.edgeMap, 0);
-    edge_mod.makeDeMap(T, bits, .yuv420, inst.width, inst.height, 0, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
+    edge_mod.makeDeMap(T, bits, cs, inst.width, inst.height, 0, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
 
     // Always evaluate against C (gives us iSumC / iSumPC, the "intrinsic"
     // interlace evidence of the current frame).
-    const ev_c = eval_iv_mod.evalIv(T, bits, .yuv420, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, // src = C
+    const ev_c = eval_iv_mod.evalIv(T, bits, cs, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, // src = C
         vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride); // ref = C
     inst.call_state.iSumC = ev_c.counter;
     inst.call_state.iSumPC = ev_c.counterp;
@@ -686,7 +701,7 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
         const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
         defer zapi.freeFrame(srcN);
         const vN = viewOf(T, zapi, srcN);
-        const ev_n = eval_iv_mod.evalIv(T, bits, .yuv420, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
+        const ev_n = eval_iv_mod.evalIv(T, bits, cs, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vN.y, vN.y_stride, vN.u, vN.u_stride, vN.v, vN.v_stride);
         inst.call_state.iSumN = ev_n.counter;
         inst.call_state.iSumPN = ev_n.counterp;
     }
@@ -696,7 +711,7 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
         const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
         defer zapi.freeFrame(srcP);
         const vP = viewOf(T, zapi, srcP);
-        const ev_p = eval_iv_mod.evalIv(T, bits, .yuv420, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
+        const ev_p = eval_iv_mod.evalIv(T, bits, cs, inst.width, inst.height, inst.pthreshold_adj, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride, vP.y, vP.y_stride, vP.u, vP.u_stride, vP.v, vP.v_stride);
         inst.call_state.iSumP = ev_p.counter;
         inst.call_state.iSumPP = ev_p.counterp;
     }
@@ -743,7 +758,7 @@ inline fn ensureMotionMap(comptime T: type, comptime bits: u8, inst: *Filter, za
 // MakeOutput — copy or deinterlace, with prev-frame scene-change shortcut.
 // ---------------------------------------------------------------------------
 
-inline fn makeOutput(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+inline fn makeOutput(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const ni: usize = @intCast(n);
     inst.call_state.currentFrame = n;
     inst.call_state.iSumC = inst.frame_info[ni].ivC;
@@ -756,28 +771,28 @@ inline fn makeOutput(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
     inst.call_state.iUseFrame = toUpper(inst.frame_info[ni].match);
 
     if (inst.frame_info[ni].ip == 'P') {
-        copyCpnInto(T, bits, inst, zapi, dst, n);
+        copyCpnInto(T, bits, cs, inst, zapi, dst, n);
         return;
     }
     // ip == 'I': dispatch on diMode.
     switch (inst.dimode) {
         .none => {
             // DI_MODE_NONE in Avisynth: skip the deinterlacer, just field-copy.
-            copyCpnInto(T, bits, inst, zapi, dst, n);
+            copyCpnInto(T, bits, cs, inst, zapi, dst, n);
         },
         .deinterlace => {
-            if (!drawPrevFrame(T, bits, inst, zapi, dst, n)) {
-                deinterlaceInto(T, bits, inst, zapi, dst, n);
+            if (!drawPrevFrame(T, bits, cs, inst, zapi, dst, n)) {
+                deinterlaceInto(T, bits, cs, inst, zapi, dst, n);
             }
         },
         .simple_blur => {
-            if (!drawPrevFrame(T, bits, inst, zapi, dst, n)) {
-                simpleBlurInto(T, bits, inst, zapi, dst, n);
+            if (!drawPrevFrame(T, bits, cs, inst, zapi, dst, n)) {
+                simpleBlurInto(T, bits, cs, inst, zapi, dst, n);
             }
         },
         .one_field => {
-            if (!drawPrevFrame(T, bits, inst, zapi, dst, n)) {
-                deintInto(T, bits, inst, zapi, dst, n);
+            if (!drawPrevFrame(T, bits, cs, inst, zapi, dst, n)) {
+                deintInto(T, bits, cs, inst, zapi, dst, n);
             }
         },
     }
@@ -785,7 +800,7 @@ inline fn makeOutput(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
 
 /// `Deinterlace_YV12` wrapper. Builds the motion4DI map via makeMotionMap2Min,
 /// then calls output_mod.deinterlace.
-inline fn deinterlaceInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+inline fn deinterlaceInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcP = zapi.getFrameFilter(plane.clipFrame(n - 1, inst.max_frames), inst.node);
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     const srcN = zapi.getFrameFilter(plane.clipFrame(n + 1, inst.max_frames), inst.node);
@@ -796,16 +811,16 @@ inline fn deinterlaceInto(comptime T: type, comptime bits: u8, inst: *Filter, za
     const vC = viewOf(T, zapi, srcC);
     const vN = viewOf(T, zapi, srcN);
 
-    motion_mod.makeMotionMap2Min(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
+    motion_mod.makeMotionMap2Min(T, bits, cs, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
 
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.deinterlace(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
+    output_mod.deinterlace(T, bits, cs, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
 }
 
 /// `SimpleBlur_YV12` wrapper. Fetches the chosen reference frame, builds
 /// the blur map into the per-instance motionMap4DI scratch buffer, then
 /// calls `output_mod.simpleBlur` to write into dst.
-inline fn simpleBlurInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+inline fn simpleBlurInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
     const vC = viewOf(T, zapi, srcC);
@@ -832,10 +847,10 @@ inline fn simpleBlurInto(comptime T: type, comptime bits: u8, inst: *Filter, zap
     motion_mod.makeSimpleBlurMap(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.simpleBlur(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vC, &vR);
+    output_mod.simpleBlur(T, bits, cs, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vC, &vR);
 }
 
-inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+inline fn copyCpnInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
     const vC = viewOf(T, zapi, srcC);
@@ -859,10 +874,10 @@ inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: 
     defer if (srcR_opt) |r| zapi.freeFrame(r);
 
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.copyCPNField(T, bits, .yuv420, inst.width, inst.height, &vD, &vC, &vR);
+    output_mod.copyCPNField(T, bits, cs, inst.width, inst.height, &vD, &vC, &vR);
 }
 
-inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
+inline fn deintInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {
     const srcC = zapi.getFrameFilter(plane.clipFrame(n, inst.max_frames), inst.node);
     defer zapi.freeFrame(srcC);
     const vC = viewOf(T, zapi, srcC);
@@ -896,24 +911,24 @@ inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     defer zapi.freeFrame(srcN);
     const vP = viewOf(T, zapi, srcP);
     const vN = viewOf(T, zapi, srcN);
-    motion_mod.makeMotionMap2Max(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
+    motion_mod.makeMotionMap2Max(T, bits, cs, inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
     // during output). Reuse it to avoid an extra allocation, matching the
     // upstream's per-call pField alloc.
     const field_map = inst.call_state.edgeMap;
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.deintOneField(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
+    output_mod.deintOneField(T, bits, cs, inst.width, inst.height, inst.call_state.motionMap4DI, inst.call_state.motionMap4DIMax, field_map, &vD, &vC, &vR);
 }
 
-inline fn drawPrevFrame(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {
+inline fn drawPrevFrame(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) bool {
     const n_prev = plane.clipFrame(n - 1, inst.max_frames);
     const n_next = plane.clipFrame(n + 1, inst.max_frames);
     const old_cur = inst.call_state.currentFrame;
     const old_use = inst.call_state.iUseFrame;
 
-    getFrameSub(T, bits, inst, zapi, n_prev);
-    getFrameSub(T, bits, inst, zapi, n_next);
+    getFrameSub(T, bits, cs, inst, zapi, n_prev);
+    getFrameSub(T, bits, cs, inst, zapi, n_next);
 
     inst.call_state.currentFrame = old_cur;
 
@@ -929,7 +944,7 @@ inline fn drawPrevFrame(comptime T: type, comptime bits: u8, inst: *Filter, zapi
     }
     if (result) {
         inst.call_state.iUseFrame = inst.frame_info[@intCast(n_prev)].match;
-        copyCpnInto(T, bits, inst, zapi, dst, n_prev);
+        copyCpnInto(T, bits, cs, inst, zapi, dst, n_prev);
     }
     inst.call_state.iUseFrame = old_use;
     return result;
@@ -946,12 +961,16 @@ pub fn validateInput(vi: *const vs.VideoInfo) ?[:0]const u8 {
     if (vi.format.colorFamily != .YUV or vi.format.sampleType != .Integer) {
         return "IT: only integer YUV input supported";
     }
-    if (vi.format.subSamplingW != 1 or vi.format.subSamplingH != 1) {
-        return "IT: only 4:2:0 chroma subsampling supported (4:4:4 lands in Phase 2)";
+    const ssw = vi.format.subSamplingW;
+    const ssh = vi.format.subSamplingH;
+    // 4:2:0 (1,1), 4:2:2 (1,0), 4:4:4 (0,0). Reject 4:1:1, 4:4:0, etc.
+    const cs_ok = (ssw == 1 and ssh == 1) or (ssw == 1 and ssh == 0) or (ssw == 0 and ssh == 0);
+    if (!cs_ok) {
+        return "IT: only 4:2:0, 4:2:2 or 4:4:4 chroma subsampling supported";
     }
     const bits = vi.format.bitsPerSample;
     if (bits != 8 and bits != 10 and bits != 12 and bits != 16) {
-        return "IT: only 8/10/12/16-bit YUV420 supported";
+        return "IT: only 8/10/12/16-bit YUV supported";
     }
     if (vi.width <= 0 or vi.height <= 0) {
         return "IT: clip must have constant format and dimensions";

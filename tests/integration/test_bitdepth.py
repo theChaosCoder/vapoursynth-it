@@ -37,6 +37,20 @@ DEPTHS = [
     (16, vs.YUV420P16, 8),
 ]
 
+# Cross-bit-depth matrix across ALL three chroma samplings:
+# (bits, 8-bit baseline format, high-bit-depth format, left-shift). The HBD
+# output must equal the 8-bit output shifted left by `shift`, for every
+# sampling — exercises the u16 kernels at 4:2:0 / 4:2:2 / 4:4:4.
+HBD_XSAMPLING = [
+    (10, vs.YUV420P8, vs.YUV420P10, 2),
+    (12, vs.YUV420P8, vs.YUV420P12, 4),
+    (16, vs.YUV420P8, vs.YUV420P16, 8),
+    (10, vs.YUV422P8, vs.YUV422P10, 2),
+    (16, vs.YUV422P8, vs.YUV422P16, 8),
+    (10, vs.YUV444P8, vs.YUV444P10, 2),
+    (16, vs.YUV444P8, vs.YUV444P16, 8),
+]
+
 
 def _read_luma_u8_or_u16(frame: vs.VideoFrame, bits: int, n_samples: int = 16) -> list[int]:
     luma = bytes(frame[0])
@@ -115,7 +129,7 @@ def test_flat_input_returns_flat_output(core, bits, vs_fmt, _, fps, dimode):
 # Layer 3: cross-bit-depth consistency
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("bits,vs_fmt,shift", DEPTHS)
+@pytest.mark.parametrize("bits,fmt8,fmtn,shift", HBD_XSAMPLING)
 @pytest.mark.parametrize("params", [
     {},
     {"fps": 24},
@@ -124,14 +138,15 @@ def test_flat_input_returns_flat_output(core, bits, vs_fmt, _, fps, dimode):
     {"fps": 24, "blend": True},
     {"ref": "ALL"},
 ])
-def test_high_bit_depth_matches_shifted_8bit(core, bits, vs_fmt, shift, params):
+def test_high_bit_depth_matches_shifted_8bit(core, bits, fmt8, fmtn, shift, params):
     """Run IT on 8-bit and on (8-bit << shift) input; the high-bit-depth
-    output must equal the 8-bit output left-shifted, exact."""
+    output must equal the 8-bit output left-shifted, exact — for 4:2:0,
+    4:2:2 and 4:4:4 (the chroma sampling comes from the fmt pair)."""
     bright_8, dark_8 = 220, 20
     bright_n, dark_n = bright_8 << shift, dark_8 << shift
 
-    clip8 = _make_interlaced_stripes(core, vs.YUV420P8, bright_8, dark_8, length=30)
-    clip_n = _make_interlaced_stripes(core, vs_fmt, bright_n, dark_n, length=30)
+    clip8 = _make_interlaced_stripes(core, fmt8, bright_8, dark_8, length=30)
+    clip_n = _make_interlaced_stripes(core, fmtn, bright_n, dark_n, length=30)
     out8 = core.zit.IT(clip8, **params)
     out_n = core.zit.IT(clip_n, **params)
 

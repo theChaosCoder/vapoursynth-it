@@ -795,7 +795,7 @@ inline fn deinterlaceInto(comptime T: type, comptime bits: u8, inst: *Filter, za
     const vC = viewOf(T, zapi, srcC);
     const vN = viewOf(T, zapi, srcN);
 
-    motion_mod.makeMotionMap2Min(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
+    motion_mod.makeMotionMap2Min(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vP, &vC, &vN);
 
     const vD = viewOfMut(T, zapi, dst);
     output_mod.deinterlace(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vP, &vC, &vN);
@@ -895,7 +895,7 @@ inline fn deintInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *c
     defer zapi.freeFrame(srcN);
     const vP = viewOf(T, zapi, srcP);
     const vN = viewOf(T, zapi, srcN);
-    motion_mod.makeMotionMap2Max(T, bits, inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
+    motion_mod.makeMotionMap2Max(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DIMax, &vP, &vC, &vN);
 
     // The field_map scratch was previously edgeMap (we don't need edgeMap
     // during output). Reuse it to avoid an extra allocation, matching the

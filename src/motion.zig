@@ -25,6 +25,7 @@ const MAX_WIDTH = plane.MAX_WIDTH;
 inline fn makeMotionMap2Common(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     comptime use_max: bool,
     width: i32,
     height: i32,
@@ -35,10 +36,7 @@ inline fn makeMotionMap2Common(
     next: *const plane.PlaneView(T),
 ) void {
     const w: usize = @intCast(width);
-    const twidth: usize = @intCast(@divTrunc(width, 2));
     const y_step: i32 = if (even_rows_only) 2 else 1;
-    // Keep 256-bit SIMD width: 16 u8 chroma lanes / 32 u8 luma; halved at u16.
-    const CL: usize = 16 / @sizeOf(T);
 
     var y: i32 = 0;
     while (y < height) : (y += y_step) {
@@ -46,64 +44,96 @@ inline fn makeMotionMap2Common(
         const pC = plane.syp(curr.y, curr.y_stride, height, 0, y);
         const pP = plane.syp(prev.y, prev.y_stride, height, 0, y);
         const pN = plane.syp(next.y, next.y_stride, height, 0, y);
-        const pC_U = plane.syp(curr.u, curr.u_stride, height, 1, y);
-        const pP_U = plane.syp(prev.u, prev.u_stride, height, 1, y);
-        const pN_U = plane.syp(next.u, next.u_stride, height, 1, y);
-        const pC_V = plane.syp(curr.v, curr.v_stride, height, 2, y);
-        const pP_V = plane.syp(prev.v, prev.v_stride, height, 2, y);
-        const pN_V = plane.syp(next.v, next.v_stride, height, 2, y);
+        const pC_U = plane.sypChroma(cs, curr.u, curr.u_stride, height, y);
+        const pP_U = plane.sypChroma(cs, prev.u, prev.u_stride, height, y);
+        const pN_U = plane.sypChroma(cs, next.u, next.u_stride, height, y);
+        const pC_V = plane.sypChroma(cs, curr.v, curr.v_stride, height, y);
+        const pP_V = plane.sypChroma(cs, prev.v, prev.v_stride, height, y);
+        const pN_V = plane.sypChroma(cs, next.v, next.v_stride, height, y);
 
-        var i: usize = 0;
-        while (i + CL <= twidth) : (i += CL) {
-            const c_y = simd.load(CL * 2, pC, i * 2);
-            const p_y = simd.load(CL * 2, pP, i * 2);
-            const n_y = simd.load(CL * 2, pN, i * 2);
-            const c_u = simd.load(CL, pC_U, i);
-            const p_u = simd.load(CL, pP_U, i);
-            const n_u = simd.load(CL, pN_U, i);
-            const c_v = simd.load(CL, pC_V, i);
-            const p_v = simd.load(CL, pP_V, i);
-            const n_v = simd.load(CL, pN_V, i);
+        if (plane.subW(cs)) {
+            // Half-rate chroma (4:2:0 / 4:2:2): CL chroma lanes broadcast to
+            // 2*CL luma lanes via expandPairs; map written at luma resolution.
+            const CL: usize = 16 / @sizeOf(T);
+            const twidth: usize = @intCast(@divTrunc(width, 2));
+            var i: usize = 0;
+            while (i + CL <= twidth) : (i += CL) {
+                const c_y = simd.load(CL * 2, pC, i * 2);
+                const p_y = simd.load(CL * 2, pP, i * 2);
+                const n_y = simd.load(CL * 2, pN, i * 2);
+                const c_u = simd.load(CL, pC_U, i);
+                const p_u = simd.load(CL, pP_U, i);
+                const n_u = simd.load(CL, pN_U, i);
+                const c_v = simd.load(CL, pC_V, i);
+                const p_v = simd.load(CL, pP_V, i);
+                const n_v = simd.load(CL, pN_V, i);
 
-            const py = simd.absDiff(CL * 2, c_y, p_y);
-            const pu = simd.absDiff(CL, c_u, p_u);
-            const pv = simd.absDiff(CL, c_v, p_v);
-            const puv = @max(pu, pv);
-            const p_lane = @max(py, simd.expandPairs(CL, puv));
+                const py = simd.absDiff(CL * 2, c_y, p_y);
+                const pu = simd.absDiff(CL, c_u, p_u);
+                const pv = simd.absDiff(CL, c_v, p_v);
+                const puv = @max(pu, pv);
+                const p_lane = @max(py, simd.expandPairs(CL, puv));
 
-            const ny = simd.absDiff(CL * 2, c_y, n_y);
-            const nu = simd.absDiff(CL, c_u, n_u);
-            const nv = simd.absDiff(CL, c_v, n_v);
-            const nuv = @max(nu, nv);
-            const n_lane = @max(ny, simd.expandPairs(CL, nuv));
+                const ny = simd.absDiff(CL * 2, c_y, n_y);
+                const nu = simd.absDiff(CL, c_u, n_u);
+                const nv = simd.absDiff(CL, c_v, n_v);
+                const nuv = @max(nu, nv);
+                const n_lane = @max(ny, simd.expandPairs(CL, nuv));
 
-            const combined = if (use_max) @max(p_lane, n_lane) else @min(p_lane, n_lane);
-            const combined_u8 = simd.toMapByteVec(T, bits, CL * 2, combined);
-            simd.store(CL * 2, pD.ptr, i * 2, combined_u8);
-        }
-        while (i < twidth) : (i += 1) {
-            const py_l = scalar.absDiff(pC[i * 2], pP[i * 2]);
-            const py_h = scalar.absDiff(pC[i * 2 + 1], pP[i * 2 + 1]);
-            const pu = scalar.absDiff(pC_U[i], pP_U[i]);
-            const pv = scalar.absDiff(pC_V[i], pP_V[i]);
-            const puv = @max(pu, pv);
-            const pl = @max(puv, py_l);
-            const ph = @max(puv, py_h);
+                const combined = if (use_max) @max(p_lane, n_lane) else @min(p_lane, n_lane);
+                const combined_u8 = simd.toMapByteVec(T, bits, CL * 2, combined);
+                simd.store(CL * 2, pD.ptr, i * 2, combined_u8);
+            }
+            while (i < twidth) : (i += 1) {
+                const py_l = scalar.absDiff(pC[i * 2], pP[i * 2]);
+                const py_h = scalar.absDiff(pC[i * 2 + 1], pP[i * 2 + 1]);
+                const pu = scalar.absDiff(pC_U[i], pP_U[i]);
+                const pv = scalar.absDiff(pC_V[i], pP_V[i]);
+                const puv = @max(pu, pv);
+                const pl = @max(puv, py_l);
+                const ph = @max(puv, py_h);
 
-            const ny_l = scalar.absDiff(pC[i * 2], pN[i * 2]);
-            const ny_h = scalar.absDiff(pC[i * 2 + 1], pN[i * 2 + 1]);
-            const nu = scalar.absDiff(pC_U[i], pN_U[i]);
-            const nv = scalar.absDiff(pC_V[i], pN_V[i]);
-            const nuv = @max(nu, nv);
-            const nl = @max(nuv, ny_l);
-            const nh = @max(nuv, ny_h);
+                const ny_l = scalar.absDiff(pC[i * 2], pN[i * 2]);
+                const ny_h = scalar.absDiff(pC[i * 2 + 1], pN[i * 2 + 1]);
+                const nu = scalar.absDiff(pC_U[i], pN_U[i]);
+                const nv = scalar.absDiff(pC_V[i], pN_V[i]);
+                const nuv = @max(nu, nv);
+                const nl = @max(nuv, ny_l);
+                const nh = @max(nuv, ny_h);
 
-            if (use_max) {
-                pD[i * 2] = scalar.toMapByte(T, bits, @max(pl, nl));
-                pD[i * 2 + 1] = scalar.toMapByte(T, bits, @max(ph, nh));
-            } else {
-                pD[i * 2] = scalar.toMapByte(T, bits, @min(pl, nl));
-                pD[i * 2 + 1] = scalar.toMapByte(T, bits, @min(ph, nh));
+                if (use_max) {
+                    pD[i * 2] = scalar.toMapByte(T, bits, @max(pl, nl));
+                    pD[i * 2 + 1] = scalar.toMapByte(T, bits, @max(ph, nh));
+                } else {
+                    pD[i * 2] = scalar.toMapByte(T, bits, @min(pl, nl));
+                    pD[i * 2 + 1] = scalar.toMapByte(T, bits, @min(ph, nh));
+                }
+            }
+        } else {
+            // Full-rate chroma (4:4:4): luma + chroma combined 1:1, no expand.
+            const VW: usize = 32 / @sizeOf(T);
+            var i: usize = 0;
+            while (i + VW <= w) : (i += VW) {
+                const c_y = simd.load(VW, pC, i);
+                const p_y = simd.load(VW, pP, i);
+                const n_y = simd.load(VW, pN, i);
+                const c_u = simd.load(VW, pC_U, i);
+                const p_u = simd.load(VW, pP_U, i);
+                const n_u = simd.load(VW, pN_U, i);
+                const c_v = simd.load(VW, pC_V, i);
+                const p_v = simd.load(VW, pP_V, i);
+                const n_v = simd.load(VW, pN_V, i);
+
+                const p_lane = @max(simd.absDiff(VW, c_y, p_y), @max(simd.absDiff(VW, c_u, p_u), simd.absDiff(VW, c_v, p_v)));
+                const n_lane = @max(simd.absDiff(VW, c_y, n_y), @max(simd.absDiff(VW, c_u, n_u), simd.absDiff(VW, c_v, n_v)));
+
+                const combined = if (use_max) @max(p_lane, n_lane) else @min(p_lane, n_lane);
+                simd.store(VW, pD.ptr, i, simd.toMapByteVec(T, bits, VW, combined));
+            }
+            while (i < w) : (i += 1) {
+                const pl = @max(scalar.absDiff(pC[i], pP[i]), @max(scalar.absDiff(pC_U[i], pP_U[i]), scalar.absDiff(pC_V[i], pP_V[i])));
+                const nl = @max(scalar.absDiff(pC[i], pN[i]), @max(scalar.absDiff(pC_U[i], pN_U[i]), scalar.absDiff(pC_V[i], pN_V[i])));
+                pD[i] = scalar.toMapByte(T, bits, if (use_max) @max(pl, nl) else @min(pl, nl));
             }
         }
     }
@@ -296,6 +326,7 @@ pub fn makeMotionMap(
 pub inline fn makeMotionMap2Min(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     dst: []u8,
@@ -304,7 +335,7 @@ pub inline fn makeMotionMap2Min(
     next: *const plane.PlaneView(T),
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    makeMotionMap2Common(T, bits, false, width, height, true, dst, prev, curr, next);
+    makeMotionMap2Common(T, bits, cs, false, width, height, true, dst, prev, curr, next);
 }
 
 /// MakeMotionMap2Max_YV12 — max per-pixel motion between (prev, curr) and
@@ -313,6 +344,7 @@ pub inline fn makeMotionMap2Min(
 pub inline fn makeMotionMap2Max(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     dst: []u8,
@@ -321,7 +353,7 @@ pub inline fn makeMotionMap2Max(
     next: *const plane.PlaneView(T),
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == dst.len);
-    makeMotionMap2Common(T, bits, true, width, height, false, dst, prev, curr, next);
+    makeMotionMap2Common(T, bits, cs, true, width, height, false, dst, prev, curr, next);
 }
 
 /// MakeSimpleBlurMap_YV12 — computes a "did the line need to be interpolated"
@@ -453,7 +485,7 @@ test "makeMotionMap2Max: identical frames yield zero map (u8)" {
     @memset(dst, 0xFF);
 
     const v: plane.PlaneView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
-    makeMotionMap2Max(u8, 8, width, height, dst, &v, &v, &v);
+    makeMotionMap2Max(u8, 8, .yuv420, width, height, dst, &v, &v, &v);
 
     for (dst) |x| try std.testing.expectEqual(@as(u8, 0), x);
 }
@@ -477,9 +509,39 @@ test "makeMotionMap2Max: u16 path identical -> zero map" {
     @memset(dst, 0xFF);
 
     const v: plane.PlaneView(u16) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w / 2, .v = vp.ptr, .v_stride = w / 2 };
-    makeMotionMap2Max(u16, 10, width, height, dst, &v, &v, &v);
+    makeMotionMap2Max(u16, 10, .yuv420, width, height, dst, &v, &v, &v);
 
     for (dst) |x| try std.testing.expectEqual(@as(u8, 0), x);
+}
+
+test "makeMotionMap2Max 4:4:4: full-resolution chroma contributes to the map" {
+    // Exercises the !subW branch: chroma planes are full width*height and a
+    // chroma-only difference must show up 1:1 in the luma-resolution map.
+    const width: i32 = 32;
+    const height: i32 = 16;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const yp = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(yp);
+    const up = try std.testing.allocator.alloc(u8, w * h); // full-res chroma
+    defer std.testing.allocator.free(up);
+    const vp = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(vp);
+    const un = try std.testing.allocator.alloc(u8, w * h); // "next" U plane, differs
+    defer std.testing.allocator.free(un);
+    const dst = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(dst);
+    @memset(yp, 100);
+    @memset(up, 100);
+    @memset(vp, 100);
+    @memset(un, 200);
+    @memset(dst, 0);
+
+    const cur: plane.PlaneView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = up.ptr, .u_stride = w, .v = vp.ptr, .v_stride = w };
+    const nxt: plane.PlaneView(u8) = .{ .y = yp.ptr, .y_stride = w, .u = un.ptr, .u_stride = w, .v = vp.ptr, .v_stride = w };
+    // prev==cur -> p_lane=0; cur->next U differs by 100 -> n_lane=100; max=100.
+    makeMotionMap2Max(u8, 8, .yuv444, width, height, dst, &cur, &cur, &nxt);
+    for (dst) |x| try std.testing.expectEqual(@as(u8, 100), x);
 }
 
 test "makeSimpleBlurMap: flat frame yields zero blur (u8)" {

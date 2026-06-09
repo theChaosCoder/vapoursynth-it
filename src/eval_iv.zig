@@ -74,7 +74,7 @@ pub inline fn evalIv(
     ref_v_stride: usize,
 ) EvalResult {
     // Refresh the odd rows of the edge map from `ref`.
-    edge_mod.makeDeMap(T, bits, width, height, 1, edge_map, ref_y, ref_y_stride, ref_u, ref_u_stride, ref_v, ref_v_stride);
+    edge_mod.makeDeMap(T, bits, .yuv420, width, height, 1, edge_map, ref_y, ref_y_stride, ref_u, ref_u_stride, ref_v, ref_v_stride);
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == edge_map.len);
     const w: usize = @intCast(width);
     const th: u8 = 40;
@@ -250,7 +250,7 @@ test "evalIv: interlaced striping flags pixels" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(u8, 8, width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    edge_mod.makeDeMap(u8, 8, .yuv420, width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
     const result = evalIv(u8, 8, width, height, 1_000_000, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expect(result.counter > 0);
@@ -280,7 +280,7 @@ test "evalIv: result is capped at pthreshold" {
     @memset(up, 100);
     @memset(vp, 100);
     @memset(edge, 0);
-    edge_mod.makeDeMap(u8, 8, width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
+    edge_mod.makeDeMap(u8, 8, .yuv420, width, height, 0, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
 
     const result = evalIv(u8, 8, width, height, 5, edge, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2, yp.ptr, w, up.ptr, w / 2, vp.ptr, w / 2);
     try std.testing.expectEqual(@as(i64, 5), result.counter);

@@ -45,6 +45,7 @@ inline fn makeDeMapAsm(
 pub inline fn makeDeMap(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     offset: i32,
@@ -57,12 +58,7 @@ pub inline fn makeDeMap(
     v_stride: usize,
 ) void {
     std.debug.assert(@as(usize, @intCast(width)) * @as(usize, @intCast(height)) == edge_out.len);
-    const twidth: usize = @intCast(@divTrunc(width, 2));
     const w_usize: usize = @intCast(width);
-
-    // Keep 256-bit SIMD width: 32 u8 lanes per luma vector, 16 u8 chroma lanes;
-    // halved at u16 (16 luma, 8 chroma) so each vector is still ~256 bits.
-    const CL: usize = 16 / @sizeOf(T);
 
     var yy: i32 = 0;
     while (yy < height) : (yy += 2) {
@@ -72,47 +68,84 @@ pub inline fn makeDeMap(
         const pC = plane.syp(y_plane_base, y_stride, height, 0, y);
         const pBB = plane.syp(y_plane_base, y_stride, height, 0, y + 2);
 
-        const pTT_U = plane.syp(u_plane_base, u_stride, height, 1, y - 2);
-        const pC_U = plane.syp(u_plane_base, u_stride, height, 1, y);
-        const pBB_U = plane.syp(u_plane_base, u_stride, height, 1, y + 2);
-
-        const pTT_V = plane.syp(v_plane_base, v_stride, height, 2, y - 2);
-        const pC_V = plane.syp(v_plane_base, v_stride, height, 2, y);
-        const pBB_V = plane.syp(v_plane_base, v_stride, height, 2, y + 2);
+        // Chroma rows are cs-aware: 4:2:0 uses the field-interleaved mapping,
+        // 4:2:2 / 4:4:4 address chroma rows 1:1 with luma (full height).
+        const pTT_U = plane.sypChroma(cs, u_plane_base, u_stride, height, y - 2);
+        const pC_U = plane.sypChroma(cs, u_plane_base, u_stride, height, y);
+        const pBB_U = plane.sypChroma(cs, u_plane_base, u_stride, height, y + 2);
+        const pTT_V = plane.sypChroma(cs, v_plane_base, v_stride, height, y - 2);
+        const pC_V = plane.sypChroma(cs, v_plane_base, v_stride, height, y);
+        const pBB_V = plane.sypChroma(cs, v_plane_base, v_stride, height, y + 2);
 
         const row_offset: usize = @intCast(y);
         const pED = edge_out[row_offset * w_usize ..][0..w_usize];
 
-        var i: usize = 0;
-        while (i + CL <= twidth) : (i += CL) {
-            const c_y = simd.load(CL * 2, pC, i * 2);
-            const t_y = simd.load(CL * 2, pTT, i * 2);
-            const b_y = simd.load(CL * 2, pBB, i * 2);
-            const c_u = simd.load(CL, pC_U, i);
-            const t_u = simd.load(CL, pTT_U, i);
-            const b_u = simd.load(CL, pBB_U, i);
-            const c_v = simd.load(CL, pC_V, i);
-            const t_v = simd.load(CL, pTT_V, i);
-            const b_v = simd.load(CL, pBB_V, i);
+        if (plane.subW(cs)) {
+            // Half-rate chroma (4:2:0 / 4:2:2): CL chroma lanes broadcast to
+            // CL*2 luma lanes via expandPairs. 256-bit vectors (32/16 luma,
+            // 16/8 chroma at u8/u16).
+            const CL: usize = 16 / @sizeOf(T);
+            const twidth: usize = @intCast(@divTrunc(width, 2));
+            var i: usize = 0;
+            while (i + CL <= twidth) : (i += CL) {
+                const c_y = simd.load(CL * 2, pC, i * 2);
+                const t_y = simd.load(CL * 2, pTT, i * 2);
+                const b_y = simd.load(CL * 2, pBB, i * 2);
+                const c_u = simd.load(CL, pC_U, i);
+                const t_u = simd.load(CL, pTT_U, i);
+                const b_u = simd.load(CL, pBB_U, i);
+                const c_v = simd.load(CL, pC_V, i);
+                const t_v = simd.load(CL, pTT_V, i);
+                const b_v = simd.load(CL, pBB_V, i);
 
-            const de_y = simd.absDiff(CL * 2, c_y, simd.pavgb(CL * 2, t_y, b_y));
-            const de_u = simd.absDiff(CL, c_u, simd.pavgb(CL, t_u, b_u));
-            const de_v = simd.absDiff(CL, c_v, simd.pavgb(CL, t_v, b_v));
-            const de_uv = @max(de_u, de_v);
-            const de_uv_expanded = simd.expandPairs(CL, de_uv);
-            const result = @max(de_y, de_uv_expanded);
-            const result_u8 = simd.toMapByteVec(T, bits, CL * 2, result);
-            simd.store(CL * 2, pED.ptr, i * 2, result_u8);
-        }
-        // Scalar tail
-        while (i < twidth) : (i += 1) {
-            const ly = makeDeMapAsm(T, pC, pTT, pBB, i, 2, 0);
-            const hy = makeDeMapAsm(T, pC, pTT, pBB, i, 2, 1);
-            const lu = makeDeMapAsm(T, pC_U, pTT_U, pBB_U, i, 1, 0);
-            const lv = makeDeMapAsm(T, pC_V, pTT_V, pBB_V, i, 1, 0);
-            const uv = @max(lu, lv);
-            pED[i * 2] = scalar.toMapByte(T, bits, @max(uv, ly));
-            pED[i * 2 + 1] = scalar.toMapByte(T, bits, @max(uv, hy));
+                const de_y = simd.absDiff(CL * 2, c_y, simd.pavgb(CL * 2, t_y, b_y));
+                const de_u = simd.absDiff(CL, c_u, simd.pavgb(CL, t_u, b_u));
+                const de_v = simd.absDiff(CL, c_v, simd.pavgb(CL, t_v, b_v));
+                const de_uv = @max(de_u, de_v);
+                const de_uv_expanded = simd.expandPairs(CL, de_uv);
+                const result = @max(de_y, de_uv_expanded);
+                const result_u8 = simd.toMapByteVec(T, bits, CL * 2, result);
+                simd.store(CL * 2, pED.ptr, i * 2, result_u8);
+            }
+            // Scalar tail
+            while (i < twidth) : (i += 1) {
+                const ly = makeDeMapAsm(T, pC, pTT, pBB, i, 2, 0);
+                const hy = makeDeMapAsm(T, pC, pTT, pBB, i, 2, 1);
+                const lu = makeDeMapAsm(T, pC_U, pTT_U, pBB_U, i, 1, 0);
+                const lv = makeDeMapAsm(T, pC_V, pTT_V, pBB_V, i, 1, 0);
+                const uv = @max(lu, lv);
+                pED[i * 2] = scalar.toMapByte(T, bits, @max(uv, ly));
+                pED[i * 2 + 1] = scalar.toMapByte(T, bits, @max(uv, hy));
+            }
+        } else {
+            // Full-rate chroma (4:4:4): chroma is processed at luma resolution,
+            // one chroma sample per luma pixel — no expandPairs.
+            const LL: usize = 32 / @sizeOf(T);
+            var i: usize = 0;
+            while (i + LL <= w_usize) : (i += LL) {
+                const c_y = simd.load(LL, pC, i);
+                const t_y = simd.load(LL, pTT, i);
+                const b_y = simd.load(LL, pBB, i);
+                const c_u = simd.load(LL, pC_U, i);
+                const t_u = simd.load(LL, pTT_U, i);
+                const b_u = simd.load(LL, pBB_U, i);
+                const c_v = simd.load(LL, pC_V, i);
+                const t_v = simd.load(LL, pTT_V, i);
+                const b_v = simd.load(LL, pBB_V, i);
+
+                const de_y = simd.absDiff(LL, c_y, simd.pavgb(LL, t_y, b_y));
+                const de_u = simd.absDiff(LL, c_u, simd.pavgb(LL, t_u, b_u));
+                const de_v = simd.absDiff(LL, c_v, simd.pavgb(LL, t_v, b_v));
+                const result = @max(de_y, @max(de_u, de_v));
+                simd.store(LL, pED.ptr, i, simd.toMapByteVec(T, bits, LL, result));
+            }
+            // Scalar tail
+            while (i < w_usize) : (i += 1) {
+                const dy = makeDeMapAsm(T, pC, pTT, pBB, i, 1, 0);
+                const du = makeDeMapAsm(T, pC_U, pTT_U, pBB_U, i, 1, 0);
+                const dv = makeDeMapAsm(T, pC_V, pTT_V, pBB_V, i, 1, 0);
+                pED[i] = scalar.toMapByte(T, bits, @max(dy, @max(du, dv)));
+            }
         }
     }
 }
@@ -138,7 +171,7 @@ test "makeDeMap: uniform input produces zero edges" {
     @memset(v_buf, 100);
     @memset(edge, 0);
 
-    makeDeMap(u8, 8, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
+    makeDeMap(u8, 8, .yuv420, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
 
     for (edge) |e| try std.testing.expectEqual(@as(u8, 0), e);
 }
@@ -164,7 +197,7 @@ test "makeDeMap: luma spike row produces edge in adjacent rows" {
     @memset(edge, 0);
 
     @memset(y_buf[6 * w .. 7 * w], 200);
-    makeDeMap(u8, 8, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
+    makeDeMap(u8, 8, .yuv420, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
 
     // Row 6 sees top=row 4 (0), bot=row 8 (0): |200 - 0| = 200
     for (edge[6 * w .. 7 * w]) |e| try std.testing.expectEqual(@as(u8, 200), e);
@@ -194,8 +227,38 @@ test "makeDeMap: u16 path downscales to u8 map" {
 
     // 10-bit spike: 200 << 2 = 800. After downscale (>> 2): 200.
     @memset(y_buf[6 * w .. 7 * w], 800);
-    makeDeMap(u16, 10, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
+    makeDeMap(u16, 10, .yuv420, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w / 2, v_buf.ptr, w / 2);
 
     for (edge[6 * w .. 7 * w]) |e| try std.testing.expectEqual(@as(u8, 200), e);
+    for (edge[4 * w .. 5 * w]) |e| try std.testing.expectEqual(@as(u8, 100), e);
+}
+
+test "makeDeMap 4:4:4: full-resolution chroma spike maps 1:1 into the edge map" {
+    // Exercises the !subW branch: chroma planes are full width*height and a
+    // chroma feature must show up at the same row as the equivalent luma one.
+    const width = 32;
+    const height = 16;
+    const w: usize = width;
+    const h: usize = height;
+    const y_buf = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(y_buf);
+    const u_buf = try std.testing.allocator.alloc(u8, w * h); // full-width chroma
+    defer std.testing.allocator.free(u_buf);
+    const v_buf = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(v_buf);
+    const edge = try std.testing.allocator.alloc(u8, w * h);
+    defer std.testing.allocator.free(edge);
+    @memset(y_buf, 0);
+    @memset(u_buf, 0);
+    @memset(v_buf, 0);
+    @memset(edge, 0);
+
+    // Bright U row at row 6; strides are full width (4:4:4).
+    @memset(u_buf[6 * w .. 7 * w], 200);
+    makeDeMap(u8, 8, .yuv444, width, height, 0, edge, y_buf.ptr, w, u_buf.ptr, w, v_buf.ptr, w);
+
+    // Row 6: max(de_y=0, de_u=|200-avg(0,0)|=200, de_v=0) = 200.
+    for (edge[6 * w .. 7 * w]) |e| try std.testing.expectEqual(@as(u8, 200), e);
+    // Row 4: de_u=|0-avg(row2=0,row6=200)|=100.
     for (edge[4 * w .. 5 * w]) |e| try std.testing.expectEqual(@as(u8, 100), e);
 }

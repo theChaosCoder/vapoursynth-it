@@ -671,7 +671,7 @@ inline fn chooseBest(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *
 
     // Even rows of edge map: from srcC at offset 0.
     @memset(inst.call_state.edgeMap, 0);
-    edge_mod.makeDeMap(T, bits, inst.width, inst.height, 0, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
+    edge_mod.makeDeMap(T, bits, .yuv420, inst.width, inst.height, 0, inst.call_state.edgeMap, vC.y, vC.y_stride, vC.u, vC.u_stride, vC.v, vC.v_stride);
 
     // Always evaluate against C (gives us iSumC / iSumPC, the "intrinsic"
     // interlace evidence of the current frame).

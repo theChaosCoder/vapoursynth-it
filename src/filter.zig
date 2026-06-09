@@ -831,7 +831,7 @@ inline fn simpleBlurInto(comptime T: type, comptime bits: u8, inst: *Filter, zap
     motion_mod.makeSimpleBlurMap(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, vC.y, vC.y_stride, vR.y, vR.y_stride);
 
     const vD = viewOfMut(T, zapi, dst);
-    output_mod.simpleBlur(T, bits, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vC, &vR);
+    output_mod.simpleBlur(T, bits, .yuv420, inst.width, inst.height, inst.call_state.motionMap4DI, &vD, &vC, &vR);
 }
 
 inline fn copyCpnInto(comptime T: type, comptime bits: u8, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, n: i32) void {

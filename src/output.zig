@@ -694,6 +694,7 @@ pub inline fn deinterlace(
 pub inline fn simpleBlur(
     comptime T: type,
     comptime bits: u8,
+    comptime cs: plane.ChromaSampling,
     width: i32,
     height: i32,
     motion4di: []const u8,
@@ -740,17 +741,20 @@ pub inline fn simpleBlur(
         const pT = plane.syp(tb.y, tb.y_stride, height, 0, y - 1);
         const pC = plane.syp(ce.y, ce.y_stride, height, 0, y);
         const pB = plane.syp(tb.y, tb.y_stride, height, 0, y + 1);
-        const pT_U = plane.syp(tb.u, tb.u_stride, height, 1, y - 1);
-        const pC_U = plane.syp(ce.u, ce.u_stride, height, 1, y);
-        const pB_U = plane.syp(tb.u, tb.u_stride, height, 1, y + 1);
-        const pT_V = plane.syp(tb.v, tb.v_stride, height, 2, y - 1);
-        const pC_V = plane.syp(ce.v, ce.v_stride, height, 2, y);
-        const pB_V = plane.syp(tb.v, tb.v_stride, height, 2, y + 1);
+        const pT_U = plane.sypChroma(cs, tb.u, tb.u_stride, height, y - 1);
+        const pC_U = plane.sypChroma(cs, ce.u, ce.u_stride, height, y);
+        const pB_U = plane.sypChroma(cs, tb.u, tb.u_stride, height, y + 1);
+        const pT_V = plane.sypChroma(cs, tb.v, tb.v_stride, height, y - 1);
+        const pC_V = plane.sypChroma(cs, ce.v, ce.v_stride, height, y);
+        const pB_V = plane.sypChroma(cs, tb.v, tb.v_stride, height, y + 1);
         const m_row_off: usize = @intCast(plane.clipY(y, height));
         const pmMC = motion4di[m_row_off * w ..][0..w];
         const pD = plane.dyp(dst.y, dst.y_stride, height, 0, y);
-        const pD_U = plane.dyp(dst.u, dst.u_stride, height, 1, y);
-        const pD_V = plane.dyp(dst.v, dst.v_stride, height, 2, y);
+        const pD_U = plane.dypChroma(cs, dst.u, dst.u_stride, height, y);
+        const pD_V = plane.dypChroma(cs, dst.v, dst.v_stride, height, y);
+        // 4:2:0 carries chroma on every other luma row (half-height); the
+        // full-height samplings (4:2:2 / 4:4:4) carry it on every row.
+        const write_chroma = if (plane.subH(cs)) (@mod(y >> 1, 2) != 0) else true;
 
         // 256-bit SIMD width = 16 u8 lanes / 8 u16 lanes for the blur body.
         const SB_LANES: usize = 16 / @sizeOf(T);
@@ -763,13 +767,13 @@ pub inline fn simpleBlur(
             const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
             if (do_blur) {
                 pD[0] = @intCast((@as(Wide, pT[0]) + @as(Wide, pB[0]) + (@as(Wide, pC[0]) << 1)) >> 2);
-                if (@mod(y >> 1, 2) != 0) {
+                if (write_chroma) {
                     pD_U[0] = @intCast((@as(Wide, pT_U[0]) + @as(Wide, pB_U[0]) + (@as(Wide, pC_U[0]) << 1)) >> 2);
                     pD_V[0] = @intCast((@as(Wide, pT_V[0]) + @as(Wide, pB_V[0]) + (@as(Wide, pC_V[0]) << 1)) >> 2);
                 }
             } else {
                 pD[0] = pC[0];
-                if (@mod(y >> 1, 2) != 0) {
+                if (write_chroma) {
                     pD_U[0] = pC_U[0];
                     pD_V[0] = pC_V[0];
                 }
@@ -803,14 +807,14 @@ pub inline fn simpleBlur(
             // Chroma: re-run scalar for the corresponding pair-of-luma indices
             // so we preserve upstream's "second luma pixel of the pair wins"
             // behaviour for the chroma write.
-            if (@mod(y >> 1, 2) != 0) {
+            if (write_chroma) {
                 var xc = x;
                 while (xc < x + SB_LANES) : (xc += 1) {
                     const ml: u8 = pmMC[xc - 1];
                     const mc: u8 = pmMC[xc];
                     const mr: u8 = pmMC[xc + 1];
                     const do_blur_c = all_pixel or ml > 12 or mc > 12 or mr > 12;
-                    const xh = xc >> 1;
+                    const xh = plane.chromaCol(cs, xc);
                     if (do_blur_c) {
                         pD_U[xh] = @intCast((@as(Wide, pT_U[xh]) + @as(Wide, pB_U[xh]) + (@as(Wide, pC_U[xh]) << 1)) >> 2);
                         pD_V[xh] = @intCast((@as(Wide, pT_V[xh]) + @as(Wide, pB_V[xh]) + (@as(Wide, pC_V[xh]) << 1)) >> 2);
@@ -829,15 +833,15 @@ pub inline fn simpleBlur(
             const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
             if (do_blur) {
                 pD[x] = @intCast((@as(Wide, pT[x]) + @as(Wide, pB[x]) + (@as(Wide, pC[x]) << 1)) >> 2);
-                if (@mod(y >> 1, 2) != 0) {
-                    const xh = x >> 1;
+                if (write_chroma) {
+                    const xh = plane.chromaCol(cs, x);
                     pD_U[xh] = @intCast((@as(Wide, pT_U[xh]) + @as(Wide, pB_U[xh]) + (@as(Wide, pC_U[xh]) << 1)) >> 2);
                     pD_V[xh] = @intCast((@as(Wide, pT_V[xh]) + @as(Wide, pB_V[xh]) + (@as(Wide, pC_V[xh]) << 1)) >> 2);
                 }
             } else {
                 pD[x] = pC[x];
-                if (@mod(y >> 1, 2) != 0) {
-                    const xh = x >> 1;
+                if (write_chroma) {
+                    const xh = plane.chromaCol(cs, x);
                     pD_U[xh] = pC_U[xh];
                     pD_V[xh] = pC_V[xh];
                 }
@@ -1042,4 +1046,39 @@ test "deinterlace 4:4:4: full-res chroma path compiles and is sane on a flat cli
     for (p[9]) |x| try std.testing.expectEqual(@as(u8, 100), x); // Y
     for (p[10]) |x| try std.testing.expectEqual(@as(u8, 100), x); // U full-res
     for (p[11]) |x| try std.testing.expectEqual(@as(u8, 100), x); // V full-res
+}
+
+test "simpleBlur 4:4:4: full-res chroma blur writes every row" {
+    // Flat input + saturated motion -> blur everywhere; (100+2*100+100)/4 = 100.
+    // Verifies the !subW chroma path writes every full-height chroma row (the
+    // same dypChroma-coverage bug class that deinterlace had).
+    const width: i32 = 48;
+    const height: i32 = 16;
+    const w: usize = @intCast(width);
+    const h: usize = @intCast(height);
+    const p = [_][]u8{
+        try std.testing.allocator.alloc(u8, w * h), // 0 src Y
+        try std.testing.allocator.alloc(u8, w * h), // 1 src U
+        try std.testing.allocator.alloc(u8, w * h), // 2 src V
+        try std.testing.allocator.alloc(u8, w * h), // 3 ref Y
+        try std.testing.allocator.alloc(u8, w * h), // 4 ref U
+        try std.testing.allocator.alloc(u8, w * h), // 5 ref V
+        try std.testing.allocator.alloc(u8, w * h), // 6 dst Y
+        try std.testing.allocator.alloc(u8, w * h), // 7 dst U
+        try std.testing.allocator.alloc(u8, w * h), // 8 dst V
+        try std.testing.allocator.alloc(u8, w * h), // 9 motion4di
+    };
+    defer for (p) |b| std.testing.allocator.free(b);
+    for (p[0..6]) |b| @memset(b, 100); // flat src + ref
+    for (p[6..9]) |b| @memset(b, 0); // dst
+    @memset(p[9], 20); // motion saturated (>12) -> blur every pixel
+
+    const dst: plane.PlaneViewMut(u8) = .{ .y = p[6].ptr, .y_stride = w, .u = p[7].ptr, .u_stride = w, .v = p[8].ptr, .v_stride = w };
+    const src: plane.PlaneView(u8) = .{ .y = p[0].ptr, .y_stride = w, .u = p[1].ptr, .u_stride = w, .v = p[2].ptr, .v_stride = w };
+    const ref: plane.PlaneView(u8) = .{ .y = p[3].ptr, .y_stride = w, .u = p[4].ptr, .u_stride = w, .v = p[5].ptr, .v_stride = w };
+    simpleBlur(u8, 8, .yuv444, width, height, p[9], &dst, &src, &ref);
+
+    for (p[6]) |x| try std.testing.expectEqual(@as(u8, 100), x); // Y
+    for (p[7]) |x| try std.testing.expectEqual(@as(u8, 100), x); // U full-res, every row
+    for (p[8]) |x| try std.testing.expectEqual(@as(u8, 100), x); // V full-res, every row
 }

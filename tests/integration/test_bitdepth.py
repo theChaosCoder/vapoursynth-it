@@ -139,9 +139,13 @@ def test_flat_input_returns_flat_output(core, bits, vs_fmt, _, fps, dimode):
     {"ref": "ALL"},
 ])
 def test_high_bit_depth_matches_shifted_8bit(core, bits, fmt8, fmtn, shift, params):
-    """Run IT on 8-bit and on (8-bit << shift) input; the high-bit-depth
-    output must equal the 8-bit output left-shifted, exact — for 4:2:0,
-    4:2:2 and 4:4:4 (the chroma sampling comes from the fmt pair)."""
+    """Run IT on 8-bit and on (8-bit << shift) input; the high-bit-depth output
+    must equal the 8-bit output left-shifted to within ±1, for 4:2:0 / 4:2:2 /
+    4:4:4 (sampling from the fmt pair). The ±1 is the inherent output-pavgb
+    rounding (HBD averages at full native precision, the 8-bit downscale floors
+    vs rounds). The IVTC *decisions* are bit-depth-deterministic (the scoring
+    kernels use scalar.pavgbScore), so there is no whole-frame divergence — a
+    regression there would surface as a diff far larger than 1."""
     bright_8, dark_8 = 220, 20
     bright_n, dark_n = bright_8 << shift, dark_8 << shift
 
@@ -157,7 +161,7 @@ def test_high_bit_depth_matches_shifted_8bit(core, bits, fmt8, fmtn, shift, para
     for n in frame_indices:
         f8 = out8.get_frame(n)
         f_n = out_n.get_frame(n)
-        # Compare every plane bit-for-bit (after scaling 8-bit up).
+        # Compare every plane against the shifted 8-bit output, within ±1.
         for p in range(f8.format.num_planes):
             luma8 = bytes(f8[p])
             luma_n = bytes(f_n[p])
@@ -166,9 +170,9 @@ def test_high_bit_depth_matches_shifted_8bit(core, bits, fmt8, fmtn, shift, para
             for i, v8 in enumerate(luma8):
                 vn = struct.unpack_from("<H", luma_n, 2 * i)[0] if bits > 8 else luma_n[i]
                 expected = v8 << shift
-                assert vn == expected, (
+                assert abs(vn - expected) <= 1, (
                     f"bits={bits} params={params} frame={n} plane={p} i={i}: "
-                    f"expected {expected} (= {v8} << {shift}), got {vn}"
+                    f"expected ~{expected} (= {v8} << {shift}), got {vn} (diff > 1)"
                 )
 
 

@@ -19,18 +19,18 @@ const scalar = @import("scalar.zig");
 
 /// min(|a-b|, |a-c|, |a - (b+c+1)/2|) — the inner "evaluate-interlace"
 /// kernel from upstream's `eval_iv_asm`.
-inline fn evalIvAsm(comptime T: type, eax: [*]const T, ebx: [*]const T, ecx: [*]const T, i: usize) T {
+inline fn evalIvAsm(comptime T: type, comptime bits: u8, eax: [*]const T, ebx: [*]const T, ecx: [*]const T, i: usize) T {
     const a = eax[i];
     const b = ebx[i];
     const c = ecx[i];
-    return @min(@min(scalar.absDiff(a, b), scalar.absDiff(a, c)), scalar.absDiff(a, scalar.pavgb(b, c)));
+    return @min(@min(scalar.absDiff(a, b), scalar.absDiff(a, c)), scalar.absDiff(a, scalar.pavgbScore(bits, b, c)));
 }
 
 /// SIMD eval-iv kernel for N lanes: min(|a-b|, |a-c|, |a - pavgb(b,c)|).
-inline fn evalIvVec(comptime N: usize, a: anytype, b: @TypeOf(a), c: @TypeOf(a)) @TypeOf(a) {
+inline fn evalIvVec(comptime N: usize, comptime bits: u8, a: anytype, b: @TypeOf(a), c: @TypeOf(a)) @TypeOf(a) {
     const ab = simd.absDiff(N, a, b);
     const ac = simd.absDiff(N, a, c);
-    const a_bc = simd.absDiff(N, a, simd.pavgb(N, b, c));
+    const a_bc = simd.absDiff(N, a, simd.pavgbScore(bits, N, b, c));
     return @min(@min(ab, ac), a_bc);
 }
 
@@ -122,18 +122,18 @@ pub inline fn evalIv(
                 const c_y = simd.load(LANES * 2, pC, i * 2);
                 const t_y = simd.load(LANES * 2, pT, i * 2);
                 const b_y = simd.load(LANES * 2, pB, i * 2);
-                const yk = evalIvVec(LANES * 2, c_y, t_y, b_y);
+                const yk = evalIvVec(LANES * 2, bits,c_y, t_y, b_y);
 
                 // Chroma kernel over LANES samples.
                 const c_u = simd.load(LANES, pC_U, i);
                 const t_u = simd.load(LANES, pT_U, i);
                 const b_u = simd.load(LANES, pB_U, i);
-                const uk = evalIvVec(LANES, c_u, t_u, b_u);
+                const uk = evalIvVec(LANES, bits,c_u, t_u, b_u);
 
                 const c_v = simd.load(LANES, pC_V, i);
                 const t_v = simd.load(LANES, pT_V, i);
                 const b_v = simd.load(LANES, pB_V, i);
-                const vk = evalIvVec(LANES, c_v, t_v, b_v);
+                const vk = evalIvVec(LANES, bits,c_v, t_v, b_v);
 
                 const uvk = @max(uk, vk);
                 const mm0_t = @max(yk, simd.expandPairs(LANES, uvk));
@@ -155,10 +155,10 @@ pub inline fn evalIv(
             }
             // Scalar tail
             while (i < widthminus16) : (i += 1) {
-                const yl_t = evalIvAsm(T, pC, pT, pB, i * 2);
-                const yh_t = evalIvAsm(T, pC, pT, pB, i * 2 + 1);
-                const u_t = evalIvAsm(T, pC_U, pT_U, pB_U, i);
-                const v_t = evalIvAsm(T, pC_V, pT_V, pB_V, i);
+                const yl_t = evalIvAsm(T, bits,pC, pT, pB, i * 2);
+                const yh_t = evalIvAsm(T, bits,pC, pT, pB, i * 2 + 1);
+                const u_t = evalIvAsm(T, bits,pC_U, pT_U, pB_U, i);
+                const v_t = evalIvAsm(T, bits,pC_V, pT_V, pB_V, i);
 
                 const uv = @max(u_t, v_t);
                 const mm0l_t = @max(yl_t, uv);
@@ -199,15 +199,15 @@ pub inline fn evalIv(
                 const c_y = simd.load(VW, pC, i);
                 const t_y = simd.load(VW, pT, i);
                 const b_y = simd.load(VW, pB, i);
-                const yk = evalIvVec(VW, c_y, t_y, b_y);
+                const yk = evalIvVec(VW, bits,c_y, t_y, b_y);
                 const c_u = simd.load(VW, pC_U, i);
                 const t_u = simd.load(VW, pT_U, i);
                 const b_u = simd.load(VW, pB_U, i);
-                const uk = evalIvVec(VW, c_u, t_u, b_u);
+                const uk = evalIvVec(VW, bits,c_u, t_u, b_u);
                 const c_v = simd.load(VW, pC_V, i);
                 const t_v = simd.load(VW, pT_V, i);
                 const b_v = simd.load(VW, pB_V, i);
-                const vk = evalIvVec(VW, c_v, t_v, b_v);
+                const vk = evalIvVec(VW, bits,c_v, t_v, b_v);
 
                 const uvk = @max(uk, vk);
                 const mm0_t = @max(yk, uvk);
@@ -228,9 +228,9 @@ pub inline fn evalIv(
             }
             // Scalar tail
             while (i < wm16) : (i += 1) {
-                const yv = evalIvAsm(T, pC, pT, pB, i);
-                const uu = evalIvAsm(T, pC_U, pT_U, pB_U, i);
-                const vv = evalIvAsm(T, pC_V, pT_V, pB_V, i);
+                const yv = evalIvAsm(T, bits,pC, pT, pB, i);
+                const uu = evalIvAsm(T, bits,pC_U, pT_U, pB_U, i);
+                const vv = evalIvAsm(T, bits,pC_V, pT_V, pB_V, i);
                 const uv = @max(uu, vv);
                 var mm0 = scalar.toMapByte(T, bits, @max(yv, uv));
                 const pe = @max(@max(peT[i], peB[i]), peC[i]);

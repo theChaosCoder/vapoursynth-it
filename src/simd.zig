@@ -24,6 +24,18 @@ pub inline fn pavgb(comptime N: usize, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
     return @intCast((a_w + b_w + @as(@Vector(N, WideT), @splat(1))) >> @as(@Vector(N, ShiftT), @splat(1)));
 }
 
+/// SIMD `pavgb` for decision metrics ONLY (see `scalar.pavgbScore`): rounds at
+/// the 8-bit-map level so the downscaled score is bit-depth-deterministic. At
+/// 8-bit it is exactly `pavgb`. Never use on output pixels.
+pub inline fn pavgbScore(comptime bits: u8, comptime N: usize, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    if (bits == 8) return pavgb(N, a, b);
+    const T = std.meta.Child(@TypeOf(a));
+    const ShiftT = std.math.Log2Int(T);
+    const shv: @Vector(N, ShiftT) = @splat(@intCast(bits - 8));
+    const sum = (a >> shv) + (b >> shv) + @as(@Vector(N, T), @splat(1));
+    return (sum >> @as(@Vector(N, ShiftT), @splat(1))) << shv;
+}
+
 /// `|a - b|` element-wise (= max(a,b) - min(a,b)).
 pub inline fn absDiff(comptime N: usize, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
     comptime std.debug.assert(@typeInfo(@TypeOf(a)).vector.len == N);

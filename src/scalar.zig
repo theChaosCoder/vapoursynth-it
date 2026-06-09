@@ -31,6 +31,17 @@ pub inline fn pavgb(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
     return @intCast((@as(WideT, a) + @as(WideT, b) + 1) >> 1);
 }
 
+/// `pavgb` for the *decision* metrics (evalIv / makeDeMap) ONLY: the rounding
+/// happens at the 8-bit-map level, so `toMapByte(>> (bits-8))` of the result is
+/// identical regardless of storage depth — keeping IVTC field/cadence decisions
+/// bit-depth-deterministic. At 8-bit it is exactly `pavgb`. NEVER use on output
+/// pixels; those keep the full-precision `pavgb`.
+pub inline fn pavgbScore(comptime bits: u8, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    if (bits == 8) return pavgb(a, b);
+    const sh: std.math.Log2Int(@TypeOf(a)) = @intCast(bits - 8);
+    return (((a >> sh) + (b >> sh) + 1) >> 1) << sh;
+}
+
 /// Downscale a T-typed pixel or diff to a u8 motion/edge-map byte by
 /// shifting right by `bits - 8`. For T=u8 this is identity. For u16-storage
 /// at bits=10/12/16, the value's upper bits collapse into the u8 range,

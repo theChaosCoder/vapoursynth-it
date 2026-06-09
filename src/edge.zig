@@ -24,6 +24,7 @@ const scalar = @import("scalar.zig");
 /// to the edge map.
 inline fn makeDeMapAsm(
     comptime T: type,
+    comptime bits: u8,
     center: [*]const T,
     top: [*]const T,
     bot: [*]const T,
@@ -32,7 +33,7 @@ inline fn makeDeMapAsm(
     offset: usize,
 ) T {
     const idx = i * step + offset;
-    return scalar.absDiff(center[idx], scalar.pavgb(top[idx], bot[idx]));
+    return scalar.absDiff(center[idx], scalar.pavgbScore(bits, top[idx], bot[idx]));
 }
 
 /// `MakeDEmap_YV12` — produce an edge map into `edge_out` (size = width*height,
@@ -98,9 +99,9 @@ pub inline fn makeDeMap(
                 const t_v = simd.load(CL, pTT_V, i);
                 const b_v = simd.load(CL, pBB_V, i);
 
-                const de_y = simd.absDiff(CL * 2, c_y, simd.pavgb(CL * 2, t_y, b_y));
-                const de_u = simd.absDiff(CL, c_u, simd.pavgb(CL, t_u, b_u));
-                const de_v = simd.absDiff(CL, c_v, simd.pavgb(CL, t_v, b_v));
+                const de_y = simd.absDiff(CL * 2, c_y, simd.pavgbScore(bits,CL * 2, t_y, b_y));
+                const de_u = simd.absDiff(CL, c_u, simd.pavgbScore(bits,CL, t_u, b_u));
+                const de_v = simd.absDiff(CL, c_v, simd.pavgbScore(bits,CL, t_v, b_v));
                 const de_uv = @max(de_u, de_v);
                 const de_uv_expanded = simd.expandPairs(CL, de_uv);
                 const result = @max(de_y, de_uv_expanded);
@@ -109,10 +110,10 @@ pub inline fn makeDeMap(
             }
             // Scalar tail
             while (i < twidth) : (i += 1) {
-                const ly = makeDeMapAsm(T, pC, pTT, pBB, i, 2, 0);
-                const hy = makeDeMapAsm(T, pC, pTT, pBB, i, 2, 1);
-                const lu = makeDeMapAsm(T, pC_U, pTT_U, pBB_U, i, 1, 0);
-                const lv = makeDeMapAsm(T, pC_V, pTT_V, pBB_V, i, 1, 0);
+                const ly = makeDeMapAsm(T, bits,pC, pTT, pBB, i, 2, 0);
+                const hy = makeDeMapAsm(T, bits,pC, pTT, pBB, i, 2, 1);
+                const lu = makeDeMapAsm(T, bits,pC_U, pTT_U, pBB_U, i, 1, 0);
+                const lv = makeDeMapAsm(T, bits,pC_V, pTT_V, pBB_V, i, 1, 0);
                 const uv = @max(lu, lv);
                 pED[i * 2] = scalar.toMapByte(T, bits, @max(uv, ly));
                 pED[i * 2 + 1] = scalar.toMapByte(T, bits, @max(uv, hy));
@@ -133,17 +134,17 @@ pub inline fn makeDeMap(
                 const t_v = simd.load(LL, pTT_V, i);
                 const b_v = simd.load(LL, pBB_V, i);
 
-                const de_y = simd.absDiff(LL, c_y, simd.pavgb(LL, t_y, b_y));
-                const de_u = simd.absDiff(LL, c_u, simd.pavgb(LL, t_u, b_u));
-                const de_v = simd.absDiff(LL, c_v, simd.pavgb(LL, t_v, b_v));
+                const de_y = simd.absDiff(LL, c_y, simd.pavgbScore(bits,LL, t_y, b_y));
+                const de_u = simd.absDiff(LL, c_u, simd.pavgbScore(bits,LL, t_u, b_u));
+                const de_v = simd.absDiff(LL, c_v, simd.pavgbScore(bits,LL, t_v, b_v));
                 const result = @max(de_y, @max(de_u, de_v));
                 simd.store(LL, pED.ptr, i, simd.toMapByteVec(T, bits, LL, result));
             }
             // Scalar tail
             while (i < w_usize) : (i += 1) {
-                const dy = makeDeMapAsm(T, pC, pTT, pBB, i, 1, 0);
-                const du = makeDeMapAsm(T, pC_U, pTT_U, pBB_U, i, 1, 0);
-                const dv = makeDeMapAsm(T, pC_V, pTT_V, pBB_V, i, 1, 0);
+                const dy = makeDeMapAsm(T, bits,pC, pTT, pBB, i, 1, 0);
+                const du = makeDeMapAsm(T, bits,pC_U, pTT_U, pBB_U, i, 1, 0);
+                const dv = makeDeMapAsm(T, bits,pC_V, pTT_V, pBB_V, i, 1, 0);
                 pED[i] = scalar.toMapByte(T, bits, @max(dy, @max(du, dv)));
             }
         }

@@ -57,7 +57,6 @@ Documentation = "https://github.com/theChaosCoder/vapoursynth-it#readme"
 [tool.hatch.build.targets.sdist]
 include = [
     "src/**/*.zig",
-    "vendor/**",
     "build.zig",
     "build.zig.zon",
     "README.md",
@@ -80,3 +79,9 @@ exclude = [
 # We still need this section so `hatch build` doesn't complain about
 # an unknown target type, but it's intentionally empty.
 bypass-selection = true
+
+[tool.pytest.ini_options]
+# Without this, a bare `pytest` from the repo root also collects
+# scripts/test_real_*.py, which take CLI arguments and load plugins at
+# module level (collection-time side effects / errors).
+testpaths = ["tests/integration"]

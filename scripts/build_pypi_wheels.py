@@ -109,11 +109,15 @@ def _metadata() -> str:
 
 
 def _wheel_file(plat_tag: str) -> str:
+    # PEP 427 allows repeated Tag headers; dotted plat_tags (e.g.
+    # manylinux2014_x86_64.manylinux_2_17_x86_64) expand to one line per
+    # compatibility alias so older pips still match the wheel.
+    tags = "".join(f"Tag: py3-none-{t}\n" for t in plat_tag.split("."))
     return (
         "Wheel-Version: 1.0\n"
         "Generator: zit/build_pypi_wheels.py\n"
         "Root-Is-Purelib: false\n"
-        f"Tag: py3-none-{plat_tag.split('.')[0]}\n"
+        f"{tags}"
     )
 
 

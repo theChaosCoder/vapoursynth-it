@@ -147,12 +147,17 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+      - name: Extract latest changelog section for the release body
+        run: |
+          awk '/^## /{n++} n==1' CHANGELOG.md > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           files: dist-zips/*.zip
           fail_on_unmatched_files: true
 

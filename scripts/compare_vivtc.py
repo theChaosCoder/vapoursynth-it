@@ -150,9 +150,9 @@ def main(argv: list[str]) -> int:
     ]
     SIG_FRAMES = (10, 50, 90, 130, 170)
     for cfg in grid:
+        label = ",".join(f"{k}={v}" for k, v in cfg.items()) or "(defaults)"
         try:
             out = core.zit.IT(moving, **cfg)
-            label = ",".join(f"{k}={v}" for k, v in cfg.items()) or "(defaults)"
             sigs = []
             for fn in SIG_FRAMES:
                 clamped = min(fn, out.num_frames - 1)

@@ -29,7 +29,11 @@ import gen_testclip
 
 
 def _clip_hash(node, order):
-    frames = {n: bytes(node.get_frame(n)[0]) for n in order}
+    def all_planes(n):
+        f = node.get_frame(n)
+        return b"".join(bytes(f[p]) for p in range(f.format.num_planes))
+
+    frames = {n: all_planes(n) for n in order}
     m = hashlib.md5()
     for n in range(node.num_frames):
         m.update(frames[n])
@@ -47,12 +51,15 @@ ORDERS = {
 
 
 # Telecine + interlaced exercise the fps=24 decimation (decide/block_info) and
-# the deinterlace path; constant_large adds a non-128 width.
-@pytest.mark.parametrize("fixture", ["interlaced_stripes", "two_frame_telecine", "constant_large"])
+# the deinterlace path; constant_large adds a non-128 width; motion_flicker is
+# the only fixture whose blocks pass the blend gate, so blend=1 there guards
+# blendInto's cross-block (base-1) rendering against access-order dependence.
+@pytest.mark.parametrize("fixture", ["interlaced_stripes", "two_frame_telecine", "constant_large", "motion_flicker"])
 @pytest.mark.parametrize("fps", [24, 30])
-def test_output_is_access_order_independent(core, fixture, fps):
+@pytest.mark.parametrize("blend", [0, 1])
+def test_output_is_access_order_independent(core, fixture, fps, blend):
     def fresh():
-        return core.zit.IT(gen_testclip.FIXTURES[fixture](), fps=fps, threshold=20, pthreshold=75)
+        return core.zit.IT(gen_testclip.FIXTURES[fixture](), fps=fps, threshold=20, pthreshold=75, blend=blend)
 
     n_frames = fresh().num_frames
     baseline = None

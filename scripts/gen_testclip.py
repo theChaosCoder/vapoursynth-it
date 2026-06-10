@@ -58,6 +58,16 @@ def two_frame_telecine(width: int = 128, height: int = 96, num_film_frames: int 
     return core.std.Loop(one_cycle, times=num_cycles)
 
 
+def motion_flicker(width: int = 128, height: int = 96, length: int = 30):
+    """Alternates two flat luma levels on every frame — sustained full-frame
+    motion. This is the only fixture whose 5-frame blocks clear the blend
+    gate (`shouldBlendBlock` needs min(diffS1) >= adjPara(1000, w, h)), so
+    it's what actually exercises blendInto/blendFrames end to end."""
+    fa = _solid(width, height, 1, 30000, 1001, [40, 128, 128])
+    fb = _solid(width, height, 1, 30000, 1001, [200, 128, 128])
+    return core.std.Loop(core.std.Splice([fa, fb]), times=length // 2)
+
+
 def interlaced_stripes(width: int = 128, height: int = 96, length: int = 20):
     """Even rows dark, odd rows bright — classic interlace-mismatch pattern.
 
@@ -79,6 +89,7 @@ FIXTURES = {
     "constant_mod16":     lambda: constant_color(176, 96, 20),
     "two_frame_telecine": lambda: two_frame_telecine(128, 96, num_film_frames=8),
     "interlaced_stripes": lambda: interlaced_stripes(128, 96, 20),
+    "motion_flicker":     lambda: motion_flicker(128, 96, 30),
 }
 
 

@@ -556,6 +556,14 @@ inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.Chro
     var z: usize = 0;
     while (z < size) : (z += 1) {
         const fno = plane.clipFrame(base + kernel.start + @as(i32, @intCast(z)), inst.max_frames);
+        // The kernel can reach into the neighbouring blocks (base-1 at
+        // offset 0, base+5 at offset 3). Decide those frames first so
+        // makeOutput renders the same pixels regardless of access order —
+        // linear playback always has the previous block computed, so this
+        // matches upstream's linear-order output under seeking too.
+        // Reach-safe: blend mode requests [base-3, base+7] and
+        // getFrameSub(fno) stays within [fno-2, fno+2].
+        getFrameSub(T, bits, cs, inst, zapi, fno);
         const tmp_opt = zapi.newVideoFrame(&inst.vi.format, inst.vi.width, inst.vi.height, null);
         if (tmp_opt == null) return;
         const tmp = tmp_opt.?;

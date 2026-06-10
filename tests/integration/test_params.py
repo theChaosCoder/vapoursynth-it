@@ -148,3 +148,18 @@ def test_blend_default_off_does_not_change_low_motion_output(core, fixtures):
     b = core.zit.IT(src, fps=24, blend=1)
     for n in range(a.num_frames):
         assert _hash(a, n) == _hash(b, n)
+
+
+def test_blend_actually_fires_on_sustained_motion(core, fixtures):
+    """The blend gate (shouldBlendBlock) needs every frame of a 5-frame block
+    above the motion threshold; all other fixtures are temporally static, so
+    without this test the blendInto/blendFrames path never executes at all."""
+    src = fixtures["motion_flicker"]()
+    out = core.zit.IT(src, fps=24, blend=1)
+    flags = [out.get_frame(n).props["ITBlended"] for n in range(out.num_frames)]
+    assert sum(flags) > 0, "blend gate never fired — fixture no longer has sustained motion"
+
+    # And blending must actually change pixels vs. blend=0.
+    ref = core.zit.IT(src, fps=24, blend=0)
+    blended = [n for n, f in enumerate(flags) if f]
+    assert any(_hash(out, n) != _hash(ref, n) for n in blended)

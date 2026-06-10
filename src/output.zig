@@ -773,6 +773,19 @@ pub inline fn simpleBlur(
         const pB_V = plane.sypChroma(cs, tb.v, tb.v_stride, height, y + 1);
         const m_row_off: usize = @intCast(plane.clipY(y, height));
         const pmMC = motion4di[m_row_off * w ..][0..w];
+        // Upstream reads pmMC[x-1]/pmMC[x+1] with raw pointers (di.cpp:2621),
+        // so the edge columns wrap into the neighbouring rows' bytes. Like
+        // deintOneField's fm_at, replicate that via absolute offsets and
+        // clamp only the map's very first / very last byte (true OOB
+        // upstream) to 0.
+        const m_base: isize = @as(isize, @intCast(m_row_off)) * @as(isize, @intCast(w));
+        const m_len: isize = @intCast(motion4di.len);
+        const m_at = struct {
+            inline fn get(buf: []const u8, idx: isize, total: isize) u8 {
+                if (idx < 0 or idx >= total) return 0;
+                return buf[@intCast(idx)];
+            }
+        }.get;
         const pD = plane.dyp(dst.y, dst.y_stride, height, 0, y);
         const pD_U = plane.dypChroma(cs, dst.u, dst.u_stride, height, y);
         const pD_V = plane.dypChroma(cs, dst.v, dst.v_stride, height, y);
@@ -785,7 +798,7 @@ pub inline fn simpleBlur(
         var x: usize = 0;
         // Scalar prologue for x=0 only.
         if (w > 0) {
-            const m_l: u8 = 0;
+            const m_l: u8 = m_at(motion4di, m_base - 1, m_len);
             const m_c: u8 = pmMC[0];
             const m_r: u8 = if (w > 1) pmMC[1] else 0;
             const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
@@ -851,9 +864,9 @@ pub inline fn simpleBlur(
         }
         // Scalar epilogue
         while (x < w) : (x += 1) {
-            const m_l: u8 = if (x > 0) pmMC[x - 1] else 0;
+            const m_l: u8 = if (x > 0) pmMC[x - 1] else m_at(motion4di, m_base - 1, m_len);
             const m_c: u8 = pmMC[x];
-            const m_r: u8 = if (x + 1 < w) pmMC[x + 1] else 0;
+            const m_r: u8 = if (x + 1 < w) pmMC[x + 1] else m_at(motion4di, m_base + @as(isize, @intCast(x)) + 1, m_len);
             const do_blur = all_pixel or m_l > 12 or m_c > 12 or m_r > 12;
             if (do_blur) {
                 pD[x] = @intCast((@as(Wide, pT[x]) + @as(Wide, pB[x]) + (@as(Wide, pC[x]) << 1)) >> 2);

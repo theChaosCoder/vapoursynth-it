@@ -606,3 +606,76 @@ test "compCp: threshold gates the confident-match path (thcomb)" {
     _ = compCp(5, 720, 480, 20, 20, fi, &cs); // threshold=20 -> strong match
     try testing.expectEqual(@as(u8, 'C'), cs.iUseFrame);
 }
+
+test "compCn: equal sums, first frame uses default branch" {
+    const fi = try makeFrameInfos(20, testing.allocator);
+    defer testing.allocator.free(fi);
+    const e_buf = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(e_buf);
+    const m1 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m1);
+    const m2 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m2);
+    var cs = CallState{
+        .edgeMap = e_buf,
+        .motionMap4DI = m1,
+        .motionMap4DIMax = m2,
+    };
+    cs.iSumC = 100;
+    cs.iSumN = 200;
+    fi[0].diffP0 = 1000;
+    fi[0].diffP1 = 1000;
+    fi[1].diffP0 = 1000;
+    fi[1].diffP1 = 1000;
+    _ = compCn(0, 720, 480, 20, 20, fi, &cs);
+    try testing.expectEqual(@as(u8, 'C'), cs.iUseFrame);
+}
+
+test "compCn: threshold gates the confident-match path (thcomb)" {
+    // Mirror of the compCp pair: with iSumC=5, iSumN=25 the OR shortcut
+    // `dc*10 < sum` is false (200 >= 30), so the confident-match path is
+    // taken iff max(sumC, sumN)=25 < thcomb.
+    const fi = try makeFrameInfos(20, testing.allocator);
+    defer testing.allocator.free(fi);
+    const e_buf = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(e_buf);
+    const m1 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m1);
+    const m2 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m2);
+    var cs = CallState{ .edgeMap = e_buf, .motionMap4DI = m1, .motionMap4DIMax = m2 };
+
+    cs.iSumC = 5;
+    cs.iSumN = 25;
+    _ = compCn(5, 720, 480, 30, 20, fi, &cs); // threshold=30 -> weak match
+    try testing.expectEqual(@as(u8, 'c'), cs.iUseFrame);
+
+    cs.iSumC = 5;
+    cs.iSumN = 25;
+    cs.iUseFrame = 'C';
+    _ = compCn(5, 720, 480, 20, 20, fi, &cs); // threshold=20 -> strong match
+    try testing.expectEqual(@as(u8, 'C'), cs.iUseFrame);
+}
+
+test "compCn: uppercase-'N' quirk on (motion-even, still-odd)" {
+    // Upstream's CompCN writes uppercase 'N' in the (mpe and spo) branch
+    // where every sibling branch writes lowercase (di.cpp:2990). Pin the
+    // quirk: iSumC == iSumN == 5 enters the gated block with dc_n=0 and
+    // dpc_pn=0; diffP0=1000 makes the even field "motion" (mpe, !spe) while
+    // the odd field stays "still" (spo, via init diffP1=-1/diffS1=0).
+    const fi = try makeFrameInfos(20, testing.allocator);
+    defer testing.allocator.free(fi);
+    const e_buf = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(e_buf);
+    const m1 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m1);
+    const m2 = try testing.allocator.alloc(u8, 64 * 48);
+    defer testing.allocator.free(m2);
+    var cs = CallState{ .edgeMap = e_buf, .motionMap4DI = m1, .motionMap4DIMax = m2 };
+
+    cs.iSumC = 5;
+    cs.iSumN = 5;
+    fi[5].diffP0 = 1000;
+    _ = compCn(5, 720, 480, 20, 20, fi, &cs);
+    try testing.expectEqual(@as(u8, 'N'), cs.iUseFrame);
+}

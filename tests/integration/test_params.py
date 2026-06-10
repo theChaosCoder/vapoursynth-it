@@ -120,15 +120,12 @@ def test_dimode0_equals_default_on_progressive_clip(core, fixtures):
         assert _hash(out3, n) == _hash(out0, n)
 
 
-# Note: a "diMode=0 vs 3 must diverge on interlaced input" test would be
-# the obvious next case, but on our static synthetic fixtures every frame
-# is classified ip='P' regardless of the visual striping — IT requires
-# temporal evidence of interlacing, which the constant-content fixtures
-# don't provide. The bit-exact upstream comparison
-# (test_upstream_compare.py) already proves diMode=3 produces the right
-# bytes; what we need from this module is just "the parameter is plumbed
-# through correctly", which test_dimode0_equals_default_on_progressive_clip
-# verifies above.
+# Note: interlaced_stripes classifies every frame ip='I', so the per-diMode
+# output kernels ARE exercised end to end; their outputs are pinned by the
+# diMode rows of the golden grid (scripts/param_grid.py GOLDEN_GRID →
+# test_filter.test_golden_hashes_match). The bit-exact upstream comparison
+# (test_upstream_compare.py) additionally proves diMode=3 produces the
+# right bytes.
 
 
 def test_blend_ignored_at_fps30(core, fixtures):

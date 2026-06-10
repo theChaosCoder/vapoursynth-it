@@ -24,22 +24,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import vapoursynth as vs                       # noqa: E402
 import gen_testclip                            # noqa: E402
+from param_grid import UPSTREAM_GRID as PARAM_GRID  # noqa: E402
 
 ZIG_PLUGIN = ROOT / "zig-out" / "lib" / "libzit.so"
 UPSTREAM_PLUGIN = ROOT / "reference" / "vapoursynth-cpp-api4" / "libit.so"
-
-PARAM_GRID = [
-    ("constant_color",     30, 20, 75),
-    ("constant_color",     24, 20, 75),
-    ("constant_large",     24, 20, 75),
-    ("constant_mod16",     24, 20, 75),
-    ("two_frame_telecine", 30, 20, 75),
-    ("two_frame_telecine", 24, 20, 75),
-    ("interlaced_stripes", 30, 20, 75),
-    ("interlaced_stripes", 24, 20, 75),
-    ("two_frame_telecine", 24, 10, 50),
-    ("two_frame_telecine", 24, 40, 150),
-]
 
 
 def hash_frame(clip: vs.VideoNode, n: int) -> str:

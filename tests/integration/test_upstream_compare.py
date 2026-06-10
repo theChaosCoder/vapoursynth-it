@@ -31,22 +31,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import gen_testclip                              # noqa: E402
+from param_grid import UPSTREAM_GRID as PARAM_GRID  # noqa: E402
 
 GOLDEN_PATH = Path(__file__).resolve().parent / "upstream_golden.json"
-
-# Same matrix scripts/gen_upstream_golden.py captures — keep them in sync.
-PARAM_GRID = [
-    ("constant_color",     30, 20, 75),
-    ("constant_color",     24, 20, 75),
-    ("constant_large",     24, 20, 75),
-    ("constant_mod16",     24, 20, 75),
-    ("two_frame_telecine", 30, 20, 75),
-    ("two_frame_telecine", 24, 20, 75),
-    ("interlaced_stripes", 30, 20, 75),
-    ("interlaced_stripes", 24, 20, 75),
-    ("two_frame_telecine", 24, 10, 50),
-    ("two_frame_telecine", 24, 40, 150),
-]
 
 _GOLDEN: dict[str, list[str]] = (
     json.loads(GOLDEN_PATH.read_text()) if GOLDEN_PATH.exists() else {}

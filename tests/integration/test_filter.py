@@ -33,13 +33,13 @@ def _frame_md5(clip: vs.VideoNode, n: int) -> str:
     return h.hexdigest()
 
 
-def _load_golden() -> dict[tuple[str, int, int, int, int], str]:
-    out: dict[tuple[str, int, int, int, int], str] = {}
+def _load_golden() -> dict[tuple[str, int, int, int, str, int, int, int], str]:
+    out: dict[tuple[str, int, int, int, str, int, int, int], str] = {}
     for line in GOLDEN.read_text().splitlines():
         if not line or line.startswith("#"):
             continue
-        fx, fps, th, pth, idx, md5 = line.split("|")
-        out[(fx, int(fps), int(th), int(pth), int(idx))] = md5
+        fx, fps, th, pth, ref, blend, dimode, idx, md5 = line.split("|")
+        out[(fx, int(fps), int(th), int(pth), ref, int(blend), int(dimode), int(idx))] = md5
     return out
 
 
@@ -218,17 +218,19 @@ def test_rejects_fps24_on_too_short_clip(core):
 # Golden-hash regression
 # ---------------------------------------------------------------------------
 
-GOLDEN_BY_PARAMS: dict[tuple[str, int, int, int], dict[int, str]] = {}
-for (fx, fps, th, pth, idx), md5 in GOLDEN_HASHES.items():
-    GOLDEN_BY_PARAMS.setdefault((fx, fps, th, pth), {})[idx] = md5
+GOLDEN_BY_PARAMS: dict[tuple[str, int, int, int, str, int, int], dict[int, str]] = {}
+for (fx, fps, th, pth, ref, blend, dimode, idx), md5 in GOLDEN_HASHES.items():
+    GOLDEN_BY_PARAMS.setdefault((fx, fps, th, pth, ref, blend, dimode), {})[idx] = md5
 
 
-@pytest.mark.parametrize("fixture_name,fps,threshold,pthreshold",
+@pytest.mark.parametrize("fixture_name,fps,threshold,pthreshold,ref,blend,dimode",
                         sorted(GOLDEN_BY_PARAMS.keys()))
-def test_golden_hashes_match(core, fixtures, fixture_name, fps, threshold, pthreshold):
+def test_golden_hashes_match(core, fixtures, fixture_name, fps, threshold, pthreshold,
+                             ref, blend, dimode):
     src = fixtures[fixture_name]()
-    out = core.zit.IT(src, fps=fps, threshold=threshold, pthreshold=pthreshold)
-    expected = GOLDEN_BY_PARAMS[(fixture_name, fps, threshold, pthreshold)]
+    out = core.zit.IT(src, fps=fps, threshold=threshold, pthreshold=pthreshold,
+                      ref=ref, blend=blend, diMode=dimode)
+    expected = GOLDEN_BY_PARAMS[(fixture_name, fps, threshold, pthreshold, ref, blend, dimode)]
     assert len(expected) == out.num_frames, (
         f"golden hash count mismatch: {len(expected)} pinned, {out.num_frames} produced"
     )

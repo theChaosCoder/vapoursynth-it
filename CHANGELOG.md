@@ -4,6 +4,77 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
+## [1.4.0] — 2026-06-10
+
+Feature release: high bit depth and additional chroma samplings, plus the
+fixes from a full audit. 8-bit 4:2:0 output with default parameters is
+unchanged (all 198 pre-existing golden hashes reproduce bit-identically);
+diMode=1 scene-change frames and diMode=2 edge columns intentionally
+changed toward Avisynth parity (see Fixed).
+
+### Added
+
+- **10/12/16-bit integer YUV input** (u16 storage). IVTC *decisions*
+  (field matching, decimation, scene logic) are bit-depth-deterministic:
+  the decision kernels round at the 8-bit map level (`pavgbScore`), so a
+  shifted 8-bit clip decides identically at any depth, while output
+  pixels keep full precision. No external oracle exists for HBD
+  (upstream is YV12-only); guarded by cross-bit-depth consistency tests.
+- **4:2:2 and 4:4:4 chroma sampling** across all kernels (4:1:1/4:4:0
+  remain rejected).
+- Real-content robustness + bit-depth-consistency harness
+  (`scripts/test_real_content.py`).
+- `threshold` parameter is now actually wired (upstream accepted it but
+  hardcoded `AdjPara(20)`; identical behaviour at the default 20).
+- Golden coverage for the previously oracle-free axes: `ref`
+  BOTTOM/ALL/NONE, `diMode` 0/1/2, `blend` 0/1 (new `motion_flicker`
+  fixture — the first whose blocks actually pass the blend motion gate);
+  `compCn` unit tests incl. the upstream uppercase-'N' quirk; the oracle
+  parameter grid now lives in one module (`scripts/param_grid.py`).
+
+### Fixed
+
+- **4:2:0 heights with `height % 4 == 2` (e.g. 720×486) are now
+  rejected.** The field-interleaved chroma row mapping requires an even
+  chroma-plane height; such clips previously caused out-of-bounds chroma
+  reads on the default path, an out-of-bounds write in the blend path,
+  and an uninitialized final chroma row (visible as cross-plane pixel
+  contamination). Upstream has the identical latent bug, so nothing
+  bit-compatible is lost.
+- **diMode=1 now always runs the full deinterlacer** (Avisynth parity:
+  only SIMPLE_BLUR/ONE_FIELD have the DrawPrevFrame scene-change
+  shortcut). Previously a scene-change frame emitted a copy of the
+  previous frame's matched fields instead.
+- **blend=1 is access-order independent**: the blend kernel's reach into
+  the previous block (`base-1`, weight 37/256) is now decided before
+  rendering, so seeking produces the same pixels as linear playback.
+- **diMode=2 edge columns match upstream**: the 3-tap motion test now
+  replicates upstream's cross-row pointer wraps at x=0/x=w−1 instead of
+  substituting 0.
+- The 1.3.2 "Known issue" (diMode=1 SIMD pavgb vs scalar truncated
+  average) was already fixed in the 4:2:2/4:4:4 work; the SIMD and
+  scalar paths are verified identical across all kernels.
+- Hardening: `threshold`/`pthreshold` validated to [0, 100000]
+  (previously overflowed i32 internally in release builds); VFR clips
+  and fps=24 on <2-frame clips rejected with clear errors; height capped
+  at 8192; out-of-nominal-range 10/12-bit samples saturate instead of
+  invoking UB; allocation-failure paths now set a proper filter error
+  instead of returning garbage frames.
+
+### CI / packaging
+
+- The integration suite (golden hashes, upstream comparison, determinism,
+  bit depth) is now **gating** — it previously ran with a job-level
+  `continue-on-error` and could never fail CI; a missing plugin now fails
+  the run instead of silently skipping every test.
+- Releases run the full test gate (Debug + ReleaseFast unit tests +
+  integration suite against the ReleaseFast artifact) before anything is
+  published; unit tests also run under ReleaseFast in CI.
+- PyPI wheels now carry the full manylinux compatibility alias tags in
+  WHEEL (the comment claimed it; the code wrote only the first alias).
+- GitHub release bodies use the latest changelog section, not the whole
+  file; `pytest` collection pinned to `tests/integration`.
+
 ## [1.3.3] — 2026-05-24
 
 Packaging-only release. Same Binaries.

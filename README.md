@@ -2,24 +2,25 @@
 
 A Zig port of the [VapourSynth-IT](https://github.com/HomeOfVapourSynthEvolution/VapourSynth-IT)
 plugin (3:2-pulldown removal for NTSC), with the Avisynth-original
-parameters restored, full frame-property support, and `@Vector`-based
-SIMD.
+parameters restored, high-bit-depth and 4:2:2/4:4:4 support, full
+frame-property support, and `@Vector`-based SIMD.
 
 Verified bit-exact against the upstream `--c` reference path across the
-integration test grid and on real-world telecined NTSC VOB samples.
+integration test grid (8-bit 4:2:0, the only format upstream supports)
+and on real-world telecined NTSC VOB samples.
 
 ## Status
 
 | Item | State |
 | --- | --- |
-| Algorithm port (8 modules, ~2200 LoC Zig) | ✅ |
-| Bit-exact vs upstream C path | ✅ (198 fixture + 720 real-VOB frames) |
+| Algorithm port (~5200 LoC Zig) | ✅ |
+| Bit-exact vs upstream C path | ✅ 8-bit 4:2:0 (198 fixture + 720 real-VOB frames) |
+| 10/12/16-bit, 4:2:2, 4:4:4 | ✅ decisions bit-depth-deterministic; no external oracle exists (upstream is YV12-only) — guarded by consistency + golden tests |
 | All Avisynth params (`ref`, `blend`, `diMode`) | ✅ |
 | Frame properties | ✅ standard + diagnostic |
 | SIMD via `@Vector` | ✅ ~2× over scalar, ~4× over VIVTC VFM |
-| Cross-compile Linux / macOS / Windows x86_64 | ✅ |
-| CI workflow | ✅ (lint + unit + cross + best-effort integration) |
-| v1.3.0 release | ✅ |
+| Cross-compile Linux / macOS (x86_64 + aarch64), Windows x86_64 | ✅ |
+| CI workflow | ✅ lint + unit (Debug & ReleaseFast) + cross + gating integration suite |
 | AI-assisted port | ✅ Anthropic's Claude — verified byte-for-byte against the upstream C reference |
 
 ## Quick start
@@ -55,10 +56,10 @@ core.zit.IT(
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `clip` | `vnode` | — | Input clip. Must be **YUV420P8**, width a multiple of 16, height even, width ≤ 8192. |
+| `clip` | `vnode` | — | Input clip. Integer YUV, 8/10/12/16-bit, 4:2:0 / 4:2:2 / 4:4:4. Width a multiple of 16 and ≤ 8192; height even (a multiple of 4 for 4:2:0), ≤ 8192; constant format and frame rate. |
 | `fps` | `int` | `24` | `24` = inverse telecine (decimate 5→4, output 24000/1001 fps), `30` = field-matching only (input fps preserved). |
-| `threshold` | `int` | `20` | Field-match decision sensitivity. Lower = more aggressive matching. |
-| `pthreshold` | `int` | `75` | Progressive-classification threshold for `_Combed`. Adjusted internally for resolution. Below: frame is `ip='P'` (clean match); above: `ip='I'` (deinterlaced). |
+| `threshold` | `int` | `20` | Field-match decision sensitivity. Lower = more aggressive matching. Valid range 0–100000. |
+| `pthreshold` | `int` | `75` | Progressive-classification threshold for `_Combed`. Adjusted internally for resolution. Below: frame is `ip='P'` (clean match); above: `ip='I'` (deinterlaced). Valid range 0–100000. |
 | `ref` | `data` | `"TOP"` | Field-order / match-search direction (case-insensitive). One of: `TOP`, `BOTTOM`, `ALL`, `NONE` (see below). |
 | `blend` | `int` (0/1) | `0` | When `1` and `fps=24`, blends adjacent post-matched frames with a triangular kernel for smoother 24p output. Motion-gated — only fires on high-motion 5-frame blocks. Ignored when `fps=30`. |
 | `diMode` | `int` | `3` | Deinterlace strategy applied when a frame is classified `ip='I'`. See below. |
@@ -108,19 +109,20 @@ Convention follows VFM/VDecimate (camelCase, plugin-name prefix, no dots
 
 ## Building from source
 
-Requires Zig 0.16.0+. Headers (VapourSynth API 4) are vendored in
-`vendor/vapoursynth/`.
+Requires Zig 0.16.0+. The VapourSynth API 4 bindings come from the
+[`vapoursynth-zig`](https://github.com/dnjulek/vapoursynth-zig) package
+pinned in `build.zig.zon`.
 
 ```bash
 zig build --release=fast            # native shared library -> zig-out/lib/libzit.so
-zig build test                       # 35 unit tests
-zig build cross                      # cross-compiled artefacts under zig-out/{linux,macos,windows}/
+zig build test                       # unit tests (also run with --release=fast in CI)
+zig build cross                      # release artefacts for all five targets
 ```
 
-Cross-compile produces:
-- `zig-out/linux/libzit.so` (x86_64, ~170 KB)
-- `zig-out/macos/libzit.dylib` (x86_64)
-- `zig-out/windows/zit.dll` (x86_64) + `.pdb`
+Cross-compile produces (ReleaseFast, stripped):
+- `zig-out/linux-x86_64/libzit.so`, `zig-out/linux-aarch64/libzit.so`
+- `zig-out/macos-x86_64/libzit.dylib`, `zig-out/macos-aarch64/libzit.dylib`
+- `zig-out/windows-x86_64/zit.dll`
 
 ## Installation
 
@@ -200,9 +202,8 @@ and is what the bit-exact comparison test runs against.
 src/
 ├── plugin.zig    # VapourSynth plugin entry (VapourSynthPluginInit2)
 ├── filter.zig    # Filter instance + getFrame lifecycle + frame-prop setting
-├── c.zig         # @cImport of vendored VS API 4 headers
 ├── state.zig     # CFrameInfo, CTFblockInfo, CallState
-├── plane.zig     # syp/dyp accessors, adjPara, clipFrame/X/Y/YH
+├── plane.zig     # syp/dyp accessors, adjPara, clipFrame/X/Y
 ├── edge.zig      # makeDeMap                (SIMD)
 ├── eval_iv.zig   # evalIv                    (SIMD)
 ├── motion.zig    # makeMotionMap, makeMotionMap2Max/Min, makeSimpleBlurMap (SIMD)
@@ -210,15 +211,16 @@ src/
 ├── decide.zig    # compCp / compCn / decide / setFt
 ├── output.zig    # copyCPNField / deintOneField / simpleBlur / deinterlace
 ├── blend.zig     # BlendFrame_YV12 port
-└── simd.zig      # @Vector helpers (pavgb, absDiff, subSat, expandPairs)
+├── simd.zig      # @Vector helpers (pavgb, absDiff, subSat, expandPairs)
+└── scalar.zig    # scalar twins of the SIMD helpers (pavgbScore, toMapByte)
 
 reference/
 ├── avisynth/                # original IT_YV12 0.1.03 source (read-only)
 ├── vapoursynth-cpp/         # upstream VS-IT @ 6fc9be8 (read-only)
 └── vapoursynth-cpp-api4/    # mechanical API3→API4 port of upstream; build for bit-exact comparison
 
-tests/integration/           # 58 pytest cases — property checks, golden hashes, upstream-compare
-scripts/                     # gen_testclip / regen_golden / compare_upstream / compare_vivtc / test_real_video
+tests/integration/           # pytest suite — properties, golden hashes, upstream-compare, determinism, bit depth
+scripts/                     # gen_testclip / param_grid / regen_golden / compare_upstream / compare_vivtc / ...
 docs/upstream_reference.md   # design notes
 ```
 

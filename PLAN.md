@@ -1,5 +1,13 @@
 # Zig port of VapourSynth-IT (namespace `zit`)
 
+> **HISTORICAL DOCUMENT.** This is the original porting plan, kept for
+> the record. It is not maintained: the port shipped (v1.3.x, CI,
+> releases, PyPI wheels), and several design rows are superseded —
+> input is no longer YUV420P8-only (8/10/12/16-bit, 4:2:0/4:2:2/4:4:4
+> since 1.4.0), the layout uses the `vapoursynth-zig` package instead of
+> `vendor/` + `src/vs.zig`, and the open checkboxes below were all
+> completed. Current state: README.md + CHANGELOG.md.
+
 > Inverse-Telecine plugin (3:2-pulldown removal) for VapourSynth,
 > originally the Avisynth plugin `IT.dll` (thejam79 2002,
 > minamina 2003), ported to VapourSynth in 2014 by msg7086. This

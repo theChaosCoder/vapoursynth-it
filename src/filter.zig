@@ -4,10 +4,13 @@
 //! file is the glue that wires VS frame fetches to the algorithm primitives
 //! and maintains the cross-frame state (`frame_info`, `block_info`).
 //!
-//! Threading mode: `fmParallelRequests`. VapourSynth then guarantees serial
-//! calls into `getFrame`, so the shared mutable state on `Filter` is safe
-//! without locking. The prefetch queue (driven by `requestFrameFilter`
-//! during `arInitial`) is still parallel under the hood.
+//! Threading mode: `fmParallelRequests`. VapourSynth serializes only the
+//! `arAllFramesReady` calls per instance — `arInitial` (the
+//! `requestNeededFrames` path) runs CONCURRENTLY from multiple worker
+//! threads and must therefore stay read-only on the instance (it only reads
+//! create-time-immutable fields today; keep it that way). All mutation of
+//! the shared state (`frame_info`, `block_info`, `call_state`, scratch
+//! maps) happens exclusively on the serialized `arAllFramesReady` path.
 
 const std = @import("std");
 const vapoursynth = @import("vapoursynth");
@@ -62,9 +65,11 @@ fn FrameViewMut(comptime T: type) type {
 /// frame was read without being requested in `requestNeededFrames` — a
 /// frame-reach bug. We panic deterministically in EVERY build mode (unlike
 /// `.?`, which is undefined behaviour under ReleaseFast) so the bug is
-/// diagnosable instead of silently corrupting output; the inlined call site
-/// shows up in the panic stack trace. The reach analysis is intricate
-/// (especially the fps=24 window), so this guard is load-bearing.
+/// diagnosable instead of silently corrupting output. In Debug builds the
+/// inlined call site shows up in the panic stack trace; release artifacts
+/// are stripped, so there it's an abort with this message only. The reach
+/// analysis is intricate (especially the fps=24 window), so this guard is
+/// load-bearing.
 inline fn viewOf(comptime T: type, zapi: *const ZAPI, frame_opt: ?*const vs.Frame) FrameView(T) {
     const frame = frame_opt orelse
         @panic("IT: source frame unavailable in getFrame — frame-reach bug (requestNeededFrames under-requested)");
@@ -320,9 +325,8 @@ pub fn create(
     const blend = (map_in.getValue(i32, "blend") orelse 0) != 0;
 
     // diMode: 0=NONE (copy with field-match only), 1=DEINTERLACE,
-    // 2=SIMPLE_BLUR, 3=ONE_FIELD (the VS upstream default; what we
-    // implement today). 1 and 2 would need the original Avisynth
-    // implementations ported.
+    // 2=SIMPLE_BLUR, 3=ONE_FIELD (the VS upstream default). All four
+    // Avisynth modes are implemented.
     const dimode_int = map_in.getValue(i32, "diMode") orelse 3;
     const dimode_val: DiMode = switch (dimode_int) {
         0 => .none,

@@ -122,18 +122,18 @@ pub inline fn evalIv(
                 const c_y = simd.load(LANES * 2, pC, i * 2);
                 const t_y = simd.load(LANES * 2, pT, i * 2);
                 const b_y = simd.load(LANES * 2, pB, i * 2);
-                const yk = evalIvVec(LANES * 2, bits,c_y, t_y, b_y);
+                const yk = evalIvVec(LANES * 2, bits, c_y, t_y, b_y);
 
                 // Chroma kernel over LANES samples.
                 const c_u = simd.load(LANES, pC_U, i);
                 const t_u = simd.load(LANES, pT_U, i);
                 const b_u = simd.load(LANES, pB_U, i);
-                const uk = evalIvVec(LANES, bits,c_u, t_u, b_u);
+                const uk = evalIvVec(LANES, bits, c_u, t_u, b_u);
 
                 const c_v = simd.load(LANES, pC_V, i);
                 const t_v = simd.load(LANES, pT_V, i);
                 const b_v = simd.load(LANES, pB_V, i);
-                const vk = evalIvVec(LANES, bits,c_v, t_v, b_v);
+                const vk = evalIvVec(LANES, bits, c_v, t_v, b_v);
 
                 const uvk = @max(uk, vk);
                 const mm0_t = @max(yk, simd.expandPairs(LANES, uvk));
@@ -155,10 +155,10 @@ pub inline fn evalIv(
             }
             // Scalar tail
             while (i < widthminus16) : (i += 1) {
-                const yl_t = evalIvAsm(T, bits,pC, pT, pB, i * 2);
-                const yh_t = evalIvAsm(T, bits,pC, pT, pB, i * 2 + 1);
-                const u_t = evalIvAsm(T, bits,pC_U, pT_U, pB_U, i);
-                const v_t = evalIvAsm(T, bits,pC_V, pT_V, pB_V, i);
+                const yl_t = evalIvAsm(T, bits, pC, pT, pB, i * 2);
+                const yh_t = evalIvAsm(T, bits, pC, pT, pB, i * 2 + 1);
+                const u_t = evalIvAsm(T, bits, pC_U, pT_U, pB_U, i);
+                const v_t = evalIvAsm(T, bits, pC_V, pT_V, pB_V, i);
 
                 const uv = @max(u_t, v_t);
                 const mm0l_t = @max(yl_t, uv);
@@ -189,6 +189,13 @@ pub inline fn evalIv(
         } else {
             // Full-rate chroma (4:4:4): luma + chroma evaluated 1:1, no
             // expandPairs, over the central region [16, width-16).
+            //
+            // Known extension asymmetry: the subsampled branch above starts
+            // at chroma i=16, i.e. luma column 32 (bit-faithful to upstream's
+            // YV12-only loop), while this branch starts at luma column 16 —
+            // so iSum magnitudes are not strictly comparable across chroma
+            // samplings. Upstream has no 4:4:4 path to match; changing either
+            // side would break the respective pinned goldens.
             const VW: usize = 32 / @sizeOf(T);
             const wm16: usize = @intCast(width - 16);
             const th_v: @Vector(VW, u8) = @splat(th);
@@ -199,15 +206,15 @@ pub inline fn evalIv(
                 const c_y = simd.load(VW, pC, i);
                 const t_y = simd.load(VW, pT, i);
                 const b_y = simd.load(VW, pB, i);
-                const yk = evalIvVec(VW, bits,c_y, t_y, b_y);
+                const yk = evalIvVec(VW, bits, c_y, t_y, b_y);
                 const c_u = simd.load(VW, pC_U, i);
                 const t_u = simd.load(VW, pT_U, i);
                 const b_u = simd.load(VW, pB_U, i);
-                const uk = evalIvVec(VW, bits,c_u, t_u, b_u);
+                const uk = evalIvVec(VW, bits, c_u, t_u, b_u);
                 const c_v = simd.load(VW, pC_V, i);
                 const t_v = simd.load(VW, pT_V, i);
                 const b_v = simd.load(VW, pB_V, i);
-                const vk = evalIvVec(VW, bits,c_v, t_v, b_v);
+                const vk = evalIvVec(VW, bits, c_v, t_v, b_v);
 
                 const uvk = @max(uk, vk);
                 const mm0_t = @max(yk, uvk);
@@ -228,9 +235,9 @@ pub inline fn evalIv(
             }
             // Scalar tail
             while (i < wm16) : (i += 1) {
-                const yv = evalIvAsm(T, bits,pC, pT, pB, i);
-                const uu = evalIvAsm(T, bits,pC_U, pT_U, pB_U, i);
-                const vv = evalIvAsm(T, bits,pC_V, pT_V, pB_V, i);
+                const yv = evalIvAsm(T, bits, pC, pT, pB, i);
+                const uu = evalIvAsm(T, bits, pC_U, pT_U, pB_U, i);
+                const vv = evalIvAsm(T, bits, pC_V, pT_V, pB_V, i);
                 const uv = @max(uu, vv);
                 var mm0 = scalar.toMapByte(T, bits, @max(yv, uv));
                 const pe = @max(@max(peT[i], peB[i]), peC[i]);

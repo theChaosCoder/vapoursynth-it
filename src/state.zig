@@ -67,8 +67,10 @@ pub const CTFblockInfo = extern struct {
 /// Ephemeral state for one in-flight GetFrame call. The C++ upstream wraps
 /// this in a fake `IScriptEnvironment` instance allocated on the stack per
 /// call; we model it as a plain struct so it can be embedded into the filter
-/// instance (sound under fmParallelRequests where calls are serialised) or
-/// stack-allocated per-call later if we ever switch to fmParallel.
+/// instance (sound under fmParallelRequests, where the arAllFramesReady
+/// calls — the only path touching this — are serialized per instance; note
+/// arInitial still runs concurrently) or stack-allocated per-call later if
+/// we ever switch to fmParallel.
 pub const CallState = struct {
     /// scratch buffers, lifetime = one GetFrame call. Not zeroed per-frame —
     /// each consumer either writes every byte it later reads

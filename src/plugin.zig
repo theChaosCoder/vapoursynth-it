@@ -48,7 +48,7 @@ test {
     _ = @import("scalar.zig");
 }
 
-test "validateInput rejects non-YUV420P8" {
+test "validateInput rejects RGB input" {
     var fmt = std.mem.zeroes(vs.VideoFormat);
     fmt.colorFamily = .RGB;
     fmt.sampleType = .Integer;

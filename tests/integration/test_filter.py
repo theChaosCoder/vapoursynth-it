@@ -184,6 +184,36 @@ def test_accepts_422_height_not_multiple_of_4(core):
     out.get_frame(out.num_frames - 1)
 
 
+@pytest.mark.parametrize("kwargs", [
+    {"threshold": -1},
+    {"threshold": 100_001},
+    {"pthreshold": -1},
+    {"pthreshold": 100_001},
+])
+def test_rejects_out_of_range_thresholds(core, fixtures, kwargs):
+    """Unvalidated values overflowed adjPara's i32 math (UB in ReleaseFast)."""
+    src = fixtures["constant_color"]()
+    with pytest.raises(vs.Error, match="must be in"):
+        core.zit.IT(src, **kwargs)
+
+
+def test_rejects_variable_frame_rate(core):
+    """fpsNum == 0 marks VFR; decimation and _Duration* props are
+    meaningless there."""
+    src = core.std.BlankClip(format=vs.YUV420P8, length=10, width=128, height=96,
+                             fpsnum=0, fpsden=1)
+    with pytest.raises(vs.Error, match="constant frame rate"):
+        core.zit.IT(src)
+
+
+def test_rejects_fps24_on_too_short_clip(core):
+    """numFrames*4/5 == 0 for a single-frame clip — createVideoFilter would
+    choke on a 0-frame VideoInfo, so refuse it with a clear message."""
+    src = core.std.BlankClip(format=vs.YUV420P8, length=1, width=128, height=96)
+    with pytest.raises(vs.Error, match="at least 2"):
+        core.zit.IT(src, fps=24)
+
+
 # ---------------------------------------------------------------------------
 # Golden-hash regression
 # ---------------------------------------------------------------------------

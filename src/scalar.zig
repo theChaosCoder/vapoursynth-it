@@ -49,7 +49,10 @@ pub inline fn pavgbScore(comptime bits: u8, a: anytype, b: @TypeOf(a)) @TypeOf(a
 /// 8-bit semantics.
 pub inline fn toMapByte(comptime T: type, comptime bits: u8, v: T) u8 {
     if (T == u8) return v;
-    return @intCast(v >> @intCast(bits - 8));
+    // Saturate: VS does not enforce the nominal range, so a clip labelled
+    // 10/12-bit can carry samples with upper bits set; their diffs shift
+    // to > 255. (At bits=16 the shift alone already bounds to 255.)
+    return @intCast(@min(v >> @intCast(bits - 8), 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -82,4 +85,15 @@ test "pavgb works on u16 without overflow" {
     try std.testing.expectEqual(@as(u16, 65535), pavgb(@as(u16, 65535), 65535));
     try std.testing.expectEqual(@as(u16, 32768), pavgb(@as(u16, 0), 65535));
     try std.testing.expectEqual(@as(u16, 513), pavgb(@as(u16, 512), 513)); // (512+513+1)/2 = 513
+}
+
+test "toMapByte saturates out-of-nominal-range HBD samples" {
+    // A "10-bit" sample with upper bits set (VS doesn't enforce the nominal
+    // range): 65535 >> 2 = 16383 would not fit u8 without the clamp.
+    try std.testing.expectEqual(@as(u8, 255), toMapByte(u16, 10, 65535));
+    try std.testing.expectEqual(@as(u8, 255), toMapByte(u16, 12, 65535));
+    try std.testing.expectEqual(@as(u8, 255), toMapByte(u16, 16, 65535));
+    // In-range values are unaffected.
+    try std.testing.expectEqual(@as(u8, 250), toMapByte(u16, 10, 1000));
+    try std.testing.expectEqual(@as(u8, 255), toMapByte(u16, 10, 1023));
 }

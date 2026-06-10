@@ -91,11 +91,37 @@ test "validateInput rejects 4:2:0 height % 4 != 0, accepts same height for 4:2:2
     vi.width = 720;
     vi.height = 486; // NTSC full raster: even, but chroma height 243 is odd
     vi.numFrames = 100;
+    vi.fpsNum = 30000;
+    vi.fpsDen = 1001;
     try std.testing.expect(filter.validateInput(&vi) != null);
 
     // 4:2:2 has full-height chroma; the same height is fine there.
     vi.format.subSamplingH = 0;
     try std.testing.expectEqual(@as(?[:0]const u8, null), filter.validateInput(&vi));
+}
+
+test "validateInput rejects VFR and oversized dimensions" {
+    var fmt = std.mem.zeroes(vs.VideoFormat);
+    fmt.colorFamily = .YUV;
+    fmt.sampleType = .Integer;
+    fmt.bitsPerSample = 8;
+    fmt.subSamplingW = 1;
+    fmt.subSamplingH = 1;
+    fmt.numPlanes = 3;
+    var vi = std.mem.zeroes(vs.VideoInfo);
+    vi.format = fmt;
+    vi.width = 720;
+    vi.height = 480;
+    vi.numFrames = 100;
+    // fpsNum == 0 (VFR) must be rejected.
+    try std.testing.expect(filter.validateInput(&vi) != null);
+
+    vi.fpsNum = 30000;
+    vi.fpsDen = 1001;
+    try std.testing.expectEqual(@as(?[:0]const u8, null), filter.validateInput(&vi));
+
+    vi.height = 16384; // even, mod 4 == 0, but above the 8192 cap
+    try std.testing.expect(filter.validateInput(&vi) != null);
 }
 
 test "validateInput accepts YUV420P8 720x480" {
@@ -111,5 +137,7 @@ test "validateInput accepts YUV420P8 720x480" {
     vi.width = 720;
     vi.height = 480;
     vi.numFrames = 100;
+    vi.fpsNum = 30000;
+    vi.fpsDen = 1001;
     try std.testing.expectEqual(@as(?[:0]const u8, null), filter.validateInput(&vi));
 }

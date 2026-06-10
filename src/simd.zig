@@ -81,7 +81,10 @@ pub inline fn store(comptime N: usize, ptr: anytype, offset: usize, v: anytype) 
 pub inline fn toMapByteVec(comptime T: type, comptime bits: u8, comptime N: usize, v: @Vector(N, T)) @Vector(N, u8) {
     if (T == u8) return v;
     const ShiftT = std.math.Log2Int(T);
-    return @intCast(v >> @as(@Vector(N, ShiftT), @splat(@intCast(bits - 8))));
+    const shifted = v >> @as(@Vector(N, ShiftT), @splat(@intCast(bits - 8)));
+    // Saturate like scalar.toMapByte: out-of-nominal-range 10/12-bit
+    // samples produce shifted diffs > 255.
+    return @intCast(@min(shifted, @as(@Vector(N, T), @splat(255))));
 }
 
 // ---------------------------------------------------------------------------
@@ -156,4 +159,15 @@ test "load/store u16" {
     store(4, @as([*]u16, &buf), 4, w);
     try std.testing.expectEqual(@as(u16, 100), buf[4]);
     try std.testing.expectEqual(@as(u16, 400), buf[7]);
+}
+
+test "toMapByteVec saturates like scalar.toMapByte" {
+    const v: @Vector(8, u16) = .{ 0, 4, 1000, 1023, 1024, 4095, 16383, 65535 };
+    const got = toMapByteVec(u16, 10, 8, v);
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        const shifted = v[i] >> 2;
+        const expected: u8 = if (shifted > 255) 255 else @intCast(shifted);
+        try std.testing.expectEqual(expected, got[i]);
+    }
 }

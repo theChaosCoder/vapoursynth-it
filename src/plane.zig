@@ -108,7 +108,11 @@ pub fn PlaneViewMut(comptime T: type) type {
 /// formula is `((v * width) / 720) * height / 480` — note the truncation
 /// order, which yields different results from one big expression.
 pub fn adjPara(v: i32, width: i32, height: i32) i32 {
-    return @divTrunc(@divTrunc(v * width, 720) * height, 480);
+    // i64 internally: `v * width` would overflow i32 well inside the
+    // validated parameter range (threshold/pthreshold up to 100000 at
+    // width 8192). The result always fits i32 for validated inputs.
+    const scaled = @divTrunc(@divTrunc(@as(i64, v) * width, 720) * height, 480);
+    return @intCast(scaled);
 }
 
 pub fn clipFrame(n: i32, max_frames: i32) i32 {

@@ -158,9 +158,9 @@ pub const Filter = struct {
         const max_frames = vi_src.numFrames;
         const width = vi_src.width;
         const height = vi_src.height;
-        const wh: usize = @intCast(width * height);
+        const wh: usize = @as(usize, @intCast(width)) * @as(usize, @intCast(height));
 
-        const frame_info = try allocator.alloc(state.CFrameInfo, @intCast(max_frames + 6));
+        const frame_info = try allocator.alloc(state.CFrameInfo, @intCast(@as(i64, max_frames) + 6));
         errdefer allocator.free(frame_info);
         for (frame_info) |*fi| fi.* = state.CFrameInfo.init;
 
@@ -216,8 +216,9 @@ pub const Filter = struct {
         };
 
         // 24fps mode: rescale numFrames/fps the same way upstream does.
+        // (i64 intermediate: numFrames * 4 can overflow i32.)
         if (self.fps == 24) {
-            self.vi.numFrames = @divTrunc(self.vi.numFrames * 4, 5);
+            self.vi.numFrames = @intCast(@divTrunc(@as(i64, self.vi.numFrames) * 4, 5));
             self.vi.fpsNum *= 4;
             if (@mod(self.vi.fpsNum, 5) == 0) {
                 self.vi.fpsNum = @divTrunc(self.vi.fpsNum, 5);
@@ -278,6 +279,28 @@ pub fn create(
 
     if (fps != 24 and fps != 30) {
         map_out.setError("IT: fps must be 24 or 30");
+        zapi.freeNode(node);
+        return;
+    }
+
+    // adjPara and every comparison site downstream are i32; cap the user
+    // range so no derived value can overflow. 100000 is far beyond any
+    // meaningful setting (upstream semantics are 8-bit-pixel-scaled sums).
+    if (threshold < 0 or threshold > 100_000) {
+        map_out.setError("IT: threshold must be in [0, 100000]");
+        zapi.freeNode(node);
+        return;
+    }
+    if (pthreshold < 0 or pthreshold > 100_000) {
+        map_out.setError("IT: pthreshold must be in [0, 100000]");
+        zapi.freeNode(node);
+        return;
+    }
+
+    // fps=24 decimates to numFrames*4/5; with fewer than 2 input frames the
+    // output clip would have 0 frames, which createVideoFilter rejects.
+    if (fps == 24 and vi.numFrames < 2) {
+        map_out.setError("IT: fps=24 requires at least 2 input frames");
         zapi.freeNode(node);
         return;
     }
@@ -410,12 +433,19 @@ fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSa
     defer zapi.freeFrame(src_for_props);
 
     const dst_opt = zapi.newVideoFrame(&inst.vi.format, inst.vi.width, inst.vi.height, src_for_props);
-    if (dst_opt == null) return null;
+    if (dst_opt == null) {
+        zapi.setFilterError("IT: frame allocation failed");
+        return null;
+    }
     const dst = dst_opt.?;
 
     var was_blended = false;
     if (inst.fps == 24 and shouldBlendBlock(inst, base24)) {
-        blendInto(T, bits, cs, inst, zapi, dst, base24, tf24);
+        if (!blendInto(T, bits, cs, inst, zapi, dst, base24, tf24)) {
+            zapi.freeFrame(dst);
+            zapi.setFilterError("IT: frame allocation failed");
+            return null;
+        }
         was_blended = true;
     } else {
         makeOutput(T, bits, cs, inst, zapi, dst, input_n);
@@ -545,7 +575,8 @@ fn shouldBlendBlock(inst: *Filter, base: i32) bool {
 
 /// `BlendFrame_YV12` analogue: render each source frame via MakeOutput,
 /// then run the temporal blend. Allocates `size` temporary VSFrames.
-inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, base: i32, tf_frame: i32) void {
+/// Returns false if a temp frame allocation failed (dst left unwritten).
+inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, dst: *vs.Frame, base: i32, tf_frame: i32) bool {
     const kernel = blend_mod.buildKernel(tf_frame - base);
     const size: usize = @intCast(kernel.size);
 
@@ -565,7 +596,7 @@ inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.Chro
         // getFrameSub(fno) stays within [fno-2, fno+2].
         getFrameSub(T, bits, cs, inst, zapi, fno);
         const tmp_opt = zapi.newVideoFrame(&inst.vi.format, inst.vi.width, inst.vi.height, null);
-        if (tmp_opt == null) return;
+        if (tmp_opt == null) return false;
         const tmp = tmp_opt.?;
         temps[z] = tmp;
         makeOutput(T, bits, cs, inst, zapi, tmp, fno);
@@ -596,6 +627,7 @@ inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.Chro
         vD.v,
         vD.v_stride,
     );
+    return true;
 }
 
 inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
@@ -983,6 +1015,11 @@ pub fn validateInput(vi: *const vs.VideoInfo) ?[:0]const u8 {
     if (vi.width <= 0 or vi.height <= 0) {
         return "IT: clip must have constant format and dimensions";
     }
+    // fpsNum == 0 marks variable frame rate. The fps=24 decimation and the
+    // _Duration* output props are meaningless for VFR input.
+    if (vi.fpsNum == 0) {
+        return "IT: clip must have a constant frame rate";
+    }
     if (vi.width & 15 != 0) {
         return "IT: width must be a multiple of 16";
     }
@@ -1000,6 +1037,9 @@ pub fn validateInput(vi: *const vs.VideoInfo) ?[:0]const u8 {
     }
     if (vi.width > MAX_WIDTH) {
         return "IT: width too large (max 8192)";
+    }
+    if (vi.height > MAX_WIDTH) {
+        return "IT: height too large (max 8192)";
     }
     return null;
 }

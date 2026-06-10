@@ -167,6 +167,23 @@ def test_rejects_invalid_fps(core, fixtures):
         core.zit.IT(src, fps=60)
 
 
+def test_rejects_420_height_not_multiple_of_4(core):
+    """height % 4 == 2 (e.g. NTSC 720x486) makes the 4:2:0 field-interleaved
+    chroma row mapping run one row past the chroma plane (OOB reads/writes,
+    uninitialized last chroma row), so it must be refused at creation."""
+    src = core.std.BlankClip(format=vs.YUV420P8, length=5, width=720, height=486)
+    with pytest.raises(vs.Error, match="multiple of 4"):
+        core.zit.IT(src)
+
+
+def test_accepts_422_height_not_multiple_of_4(core):
+    """4:2:2 chroma is full-height, so the mod-4 restriction must not apply."""
+    src = core.std.BlankClip(format=vs.YUV422P8, length=10, width=720, height=486)
+    out = core.zit.IT(src)
+    out.get_frame(0)
+    out.get_frame(out.num_frames - 1)
+
+
 # ---------------------------------------------------------------------------
 # Golden-hash regression
 # ---------------------------------------------------------------------------

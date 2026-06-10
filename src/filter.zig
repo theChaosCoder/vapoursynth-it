@@ -981,6 +981,15 @@ pub fn validateInput(vi: *const vs.VideoInfo) ?[:0]const u8 {
     if (vi.height & 1 != 0) {
         return "IT: height must be even";
     }
+    // 4:2:0's field-interleaved chroma row mapping ((y>>2)<<1 | y&1) requires
+    // an even chroma-plane height. With height % 4 == 2 (e.g. 720x486) the
+    // last luma row maps one row past the chroma plane: OOB reads on the
+    // analysis path, an OOB write in blendFrames, and an uninitialized final
+    // chroma row from copyCPNField. Upstream's SYP/DYP have the same latent
+    // OOB, so rejecting these heights costs no bit-compatibility.
+    if (ssh == 1 and vi.height & 3 != 0) {
+        return "IT: height must be a multiple of 4 for 4:2:0 input";
+    }
     if (vi.width > MAX_WIDTH) {
         return "IT: width too large (max 8192)";
     }

@@ -78,6 +78,26 @@ test "validateInput rejects unknown/zero frames" {
     try std.testing.expect(filter.validateInput(&vi) != null);
 }
 
+test "validateInput rejects 4:2:0 height % 4 != 0, accepts same height for 4:2:2" {
+    var fmt = std.mem.zeroes(vs.VideoFormat);
+    fmt.colorFamily = .YUV;
+    fmt.sampleType = .Integer;
+    fmt.bitsPerSample = 8;
+    fmt.subSamplingW = 1;
+    fmt.subSamplingH = 1;
+    fmt.numPlanes = 3;
+    var vi = std.mem.zeroes(vs.VideoInfo);
+    vi.format = fmt;
+    vi.width = 720;
+    vi.height = 486; // NTSC full raster: even, but chroma height 243 is odd
+    vi.numFrames = 100;
+    try std.testing.expect(filter.validateInput(&vi) != null);
+
+    // 4:2:2 has full-height chroma; the same height is fine there.
+    vi.format.subSamplingH = 0;
+    try std.testing.expectEqual(@as(?[:0]const u8, null), filter.validateInput(&vi));
+}
+
 test "validateInput accepts YUV420P8 720x480" {
     var fmt = std.mem.zeroes(vs.VideoFormat);
     fmt.colorFamily = .YUV;

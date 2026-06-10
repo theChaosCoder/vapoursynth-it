@@ -34,14 +34,15 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     // ---- Unit tests -------------------------------------------------------
-    // On Linux we explicitly pin the test target to `x86_64-linux-gnu` so
-    // that Zig links against its bundled glibc startup files. The system
+    // On x86_64 Linux we explicitly pin the test target to `x86_64-linux-gnu`
+    // so that Zig links against its bundled glibc startup files. The system
     // crt1.o on some recent distros (e.g. CachyOS glibc 16.1.1) emits
     // `.sframe` relocations that Zig's LLD does not yet understand, which
     // breaks `zig build test` for native-host targets. The shared library
-    // build is unaffected (no crt linkage).
-    const host_tag = builtin.os.tag;
-    const test_target = if (host_tag == .linux)
+    // build is unaffected (no crt linkage). Gated on the host arch so
+    // aarch64/musl Linux hosts don't get tests they can't run.
+    const pin_test_target = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64;
+    const test_target = if (pin_test_target)
         b.resolveTargetQuery(std.Target.Query.parse(
             .{ .arch_os_abi = "x86_64-linux-gnu" },
         ) catch unreachable)

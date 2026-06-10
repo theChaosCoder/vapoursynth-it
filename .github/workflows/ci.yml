@@ -30,8 +30,13 @@ jobs:
       - name: Check formatting
         run: zig fmt --check src build.zig build.zig.zon
 
-      - name: Run unit tests
+      - name: Run unit tests (Debug, safety-checked)
         run: zig build test --summary all
+
+      - name: Run unit tests (ReleaseFast — shipped semantics)
+        # Release artifacts are ReleaseFast: overflow/cast bugs that panic in
+        # Debug wrap silently there, so the suite must pass in both modes.
+        run: zig build test --release=fast --summary all
 
       - name: Build all five platform binaries
         # The `cross` step in build.zig deposits each artefact under a
@@ -78,7 +83,6 @@ jobs:
     name: Integration tests
     runs-on: ubuntu-latest
     needs: [build]
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
@@ -101,6 +105,9 @@ jobs:
       - name: Run pytest
         env:
           PYTHONPATH: scripts
+          # Fail (not skip) if the plugin is missing — a silent session-skip
+          # would turn a build/layout breakage into a green run.
+          ZIT_REQUIRE_PLUGIN: "1"
         run: |
           python -c "import vapoursynth as vs; print(vs.core)"
           pytest tests/integration -v

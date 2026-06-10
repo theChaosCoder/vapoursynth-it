@@ -26,16 +26,16 @@ const blend_mod = @import("blend.zig");
 
 /// Field-order parameter values. Upstream's `ref="TOP"` corresponds to
 /// `REF_PREV` semantics in the Avisynth original (match against previous
-/// frame). The VS upstream port simplified this away and only supports the
-/// `top` mode; we expose the parameter for compatibility with Avisynth
-/// scripts but only `top` is fully implemented today.
+/// frame). The VS upstream port simplified this away and hardcodes `top`;
+/// we implement all four Avisynth modes (`bottom` dispatches to compCn,
+/// `all` picks by iSumP/iSumN, `none` skips chooseBest entirely).
 pub const Ref = enum { top, bottom, all, none };
 
 /// Deinterlace strategy when a frame is classified interlaced (ip='I').
-/// Upstream VapourSynth hardcodes `one_field`; the Avisynth original
-/// supports four modes. We implement `none` and `one_field`; `deinterlace`
-/// and `simple_blur` would need their Avisynth implementations ported and
-/// currently raise an error.
+/// Upstream VapourSynth hardcodes `one_field`; we implement all four
+/// Avisynth modes. Only `simple_blur` and `one_field` take the
+/// DrawPrevFrame scene-change shortcut (di.cpp:3819) — `deinterlace`
+/// always runs the full deinterlacer.
 pub const DiMode = enum(u8) { none = 0, deinterlace = 1, simple_blur = 2, one_field = 3 };
 
 const MAX_WIDTH = plane.MAX_WIDTH;
@@ -781,9 +781,9 @@ inline fn makeOutput(comptime T: type, comptime bits: u8, comptime cs: plane.Chr
             copyCpnInto(T, bits, cs, inst, zapi, dst, n);
         },
         .deinterlace => {
-            if (!drawPrevFrame(T, bits, cs, inst, zapi, dst, n)) {
-                deinterlaceInto(T, bits, cs, inst, zapi, dst, n);
-            }
+            // Avisynth's DI_MODE_DEINTERLACE has no DrawPrevFrame shortcut
+            // (di.cpp:3819) — the full deinterlacer always runs.
+            deinterlaceInto(T, bits, cs, inst, zapi, dst, n);
         },
         .simple_blur => {
             if (!drawPrevFrame(T, bits, cs, inst, zapi, dst, n)) {

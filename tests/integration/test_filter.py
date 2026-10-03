@@ -80,6 +80,32 @@ def test_fps24_rescales_fps_metadata(core, fixtures):
     assert (out.fps_num, out.fps_den) == (24000, 1001)
 
 
+@pytest.mark.parametrize("num,den,expected", [
+    (25, 2, (10, 1)),
+    (25, 4, (5, 1)),
+    (1, 4, (1, 5)),
+    (29, 2, (58, 5)),
+    (9223372036854775805, 1, (7378697629483820644, 1)),
+])
+def test_fps24_reduces_rate_before_checking_overflow(core, num, den, expected):
+    src = core.std.BlankClip(width=128, height=96, length=10,
+                            format=vs.YUV420P8, fpsnum=num, fpsden=den)
+    out = core.zit.IT(src)
+    assert (out.fps_num, out.fps_den) == expected
+    props = out.get_frame(0).props
+    assert (props["_DurationNum"], props["_DurationDen"]) == expected[::-1]
+
+
+@pytest.mark.parametrize("num,den", [(2**63 - 1, 1), (1, 2**63 - 1)])
+def test_fps24_rejects_unrepresentable_rate(core, num, den):
+    src = core.std.BlankClip(width=128, height=96, length=10,
+                            format=vs.YUV420P8, fpsnum=num, fpsden=den)
+    with pytest.raises(vs.Error, match="output frame rate exceeds"):
+        core.zit.IT(src)
+    out = core.zit.IT(src, fps=30)
+    assert (out.fps_num, out.fps_den) == (num, den)
+
+
 def test_output_format_matches_input(core, fixtures):
     src = fixtures["constant_color"]()
     out = core.zit.IT(src)

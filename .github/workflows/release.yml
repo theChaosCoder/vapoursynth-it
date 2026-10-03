@@ -101,6 +101,9 @@ jobs:
       - name: Cross-compile (Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64)
         run: zig build cross
 
+      - name: Check binary deployment and VapourSynth API compatibility
+        run: python -m unittest discover -s tests/packaging -v
+
       - name: Stage GitHub-release zips
         run: |
           set -euo pipefail

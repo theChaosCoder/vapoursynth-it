@@ -15,6 +15,12 @@ const PLUGIN_NAMESPACE = "zit";
 const PLUGIN_NAME = "VapourSynth IVTC Filter (Zig port)";
 const PLUGIN_VERSION = std.SemanticVersion{ .major = 1, .minor = 4, .patch = 0 };
 
+comptime {
+    // Enforce the R55 minimum for native, test, and cross builds alike.
+    if (vs.VAPOURSYNTH_API_VERSION != (4 << 16))
+        @compileError("zit must target VapourSynth API 4.0 (R55)");
+}
+
 export fn VapourSynthPluginInit2(plugin: *vs.Plugin, vspapi: *const vs.PLUGINAPI) void {
     ZAPI.Plugin.config(PLUGIN_ID, PLUGIN_NAMESPACE, PLUGIN_NAME, PLUGIN_VERSION, plugin, vspapi);
     ZAPI.Plugin.function(

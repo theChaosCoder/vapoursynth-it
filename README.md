@@ -57,12 +57,17 @@ core.zit.IT(
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
 | `clip` | `vnode` | — | Input clip. Integer YUV, 8/10/12/16-bit, 4:2:0 / 4:2:2 / 4:4:4. Width a multiple of 16 and ≤ 8192; height even (a multiple of 4 for 4:2:0), ≤ 8192; constant format and frame rate. |
-| `fps` | `int` | `24` | `24` = inverse telecine (decimate 5→4, output 24000/1001 fps), `30` = field-matching only (input fps preserved). |
+| `fps` | `int` | `24` | `24` = inverse telecine (decimate 5→4, output rate is 4/5 of the input, e.g. 30000/1001 → 24000/1001 fps), `30` = field-matching only (input fps preserved). |
 | `threshold` | `int` | `20` | Field-match decision sensitivity. Lower = more aggressive matching. Valid range 0–100000. |
 | `pthreshold` | `int` | `75` | Progressive-classification threshold for `_Combed`. Adjusted internally for resolution. Below: frame is `ip='P'` (clean match); above: `ip='I'` (deinterlaced). Valid range 0–100000. |
 | `ref` | `data` | `"TOP"` | Field-order / match-search direction (case-insensitive). One of: `TOP`, `BOTTOM`, `ALL`, `NONE` (see below). |
 | `blend` | `int` (0/1) | `0` | When `1` and `fps=24`, blends adjacent post-matched frames with a triangular kernel for smoother 24p output. Motion-gated — only fires on high-motion 5-frame blocks. Ignored when `fps=30`. |
 | `diMode` | `int` | `3` | Deinterlace strategy applied when a frame is classified `ip='I'`. See below. |
+
+In `fps=24` mode, decimation carries the cadence forward from earlier blocks.
+Seeking and parallel prefetch produce the same output as linear playback.
+The first seek ahead analyzes any missing predecessors in small batches;
+later requests reuse those decisions. This can add latency to the first seek.
 
 ### `ref` values
 
@@ -112,7 +117,7 @@ Convention follows VFM/VDecimate (camelCase, plugin-name prefix, no dots
 Requires Zig 0.17.0 (also used by CI and release builds). The VapourSynth
 API 4 bindings come from the
 [`vapoursynth-zig`](https://github.com/dnjulek/vapoursynth-zig) package
-pinned in `build.zig.zon`.
+pinned in `build.zig.zon`, explicitly configured for API 4.0 (VapourSynth R55+).
 
 ```bash
 zig build --release=fast            # native shared library -> zig-out/lib/libzit.so
@@ -124,6 +129,12 @@ Cross-compile produces (ReleaseFast, stripped):
 - `zig-out/linux-x86_64/libzit.so`, `zig-out/linux-aarch64/libzit.so`
 - `zig-out/macos-x86_64/libzit.dylib`, `zig-out/macos-aarch64/libzit.dylib`
 - `zig-out/windows-x86_64/zit.dll`
+
+Release binaries target glibc 2.17+, macOS 10.9+ (Intel), and macOS 11.0+
+(Apple Silicon). `scripts/build_pypi_wheels.py` checks binary deployment
+requirements against the wheel tags before packaging. Run the compatibility
+regressions after cross-compiling with
+`python -m unittest discover -s tests/packaging -v`.
 
 ## Installation
 
@@ -181,9 +192,10 @@ everything plus fixes a few latent bugs:
    inheritance of source props, plus `IT*` diagnostics). Upstream calls
    `newVideoFrame(propSrc=null)` so output frames carry no metadata,
    which breaks downstream `core.resize.*` colorspace handling.
-3. **Threading**: registered as `fmParallelRequests`. Upstream uses
-   `fmParallel` despite sharing mutable per-instance state across calls
-   — a latent race condition that VS R55+ exposes more often.
+3. **Threading**: registered as `fmUnordered` to serialize state access and
+   request planning. Decimation blocks are analyzed in source order, making
+   seeking and prefetch deterministic. Upstream uses `fmParallel` despite
+   sharing mutable per-instance state across calls.
 4. **Frame request range**: widened to cover what the algorithm actually
    reads (`[base-2, base+6]` for fps=24, `[n-2, n+2]` for fps=30 — plus
    `[base-3, base+7]` when `blend=true`). Upstream relied on the

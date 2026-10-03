@@ -390,19 +390,9 @@ pub fn decide(
             }
         }
 
-        // Cross-block decimation smoothing ('y'): reads the PREVIOUS block's
-        // decision. This is the one place `decide` depends on whether an
-        // earlier block was already decided — i.e. on frame-processing ORDER.
-        // Under sequential output (normal playback/encode) the previous block
-        // is always decided first, so the result is stable; under random
-        // access or VapourSynth's parallel prefetch it could, in principle,
-        // see the previous block still 'U' and choose differently. For every
-        // current test fixture this branch never flips the emitted frames
-        // (asserted by tests/integration/test_determinism.py). A fully
-        // order-independent fix would require deciding all prior blocks in
-        // sequence (unbounded frame-reach); kept as-is to stay bit-exact with
-        // the upstream algorithm. If you add cross-frame state, keep that
-        // determinism test green.
+        // Cross-block decimation smoothing ('y'): inherit the previous
+        // block's drop position. The filter analyzes blocks in source order
+        // before rendering, including under seeking and parallel prefetch.
         if (base - 5 >= 0 and block_info[@intCast(@divTrunc(base, 5) - 1)].level != 'U') {
             const tcfi = block_info[@intCast(@divTrunc(base, 5) - 1)].cfi;
             const cidx: usize = @intCast(base + tcfi);

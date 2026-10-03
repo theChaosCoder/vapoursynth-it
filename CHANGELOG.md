@@ -14,6 +14,20 @@ follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 - Update `vapoursynth-zig` from `92b8545` to `b87ff61` (2026-06-20),
   including corrected C API signatures and wrapper fixes.
 
+### Fixed
+
+- Decide decimation blocks in source order even during seeking or concurrent
+  prefetch, preserving the previous block's cadence and linear-playback output.
+  Missing predecessors are analyzed in small batches with early frame release;
+  the first seek ahead can take longer while their decisions are cached.
+- Fully reduce the output frame rate before checking its 64-bit limits.
+  Rates such as `25/2` now correctly become `10/1`; unrepresentable output
+  rates produce a filter error instead of overflow or invalid metadata.
+- Pin release builds to glibc 2.17 and macOS 10.9/11.0 to match their wheel
+  tags, and validate the binaries during packaging and CI.
+- Explicitly select VapourSynth API 4.0, retaining the advertised R55 minimum
+  instead of inheriting the bindings' API 4.1 default.
+
 ## [1.4.0] — 2026-06-10
 
 Feature release: high bit depth and additional chroma samplings, plus the

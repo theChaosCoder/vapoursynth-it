@@ -38,7 +38,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
+import re
+import struct
 import zipfile
 from pathlib import Path
 
@@ -53,9 +54,9 @@ VERSION = "1.4.0"
 # (Zig target dir, binary filename, wheel platform tag).
 #
 # The wheel platform tags follow PEP 425. Zig cross-compiles against
-# GNU libc; the broadest compatible manylinux tag for that ABI is
-# `manylinux2014`. macOS we conservatively tag for `10.9+` (intel) /
-# `11.0+` (arm64) because Zig's defaults already target those.
+# GNU libc 2.17 and macOS 10.9 (Intel) / 11.0 (ARM64), explicitly set in
+# build.zig. Validate the binaries before packaging: Zig defaults alone
+# do not guarantee these deployment baselines.
 PLATFORMS = [
     ("linux-x86_64",   "libzit.so",     "manylinux2014_x86_64.manylinux_2_17_x86_64"),
     ("linux-aarch64",  "libzit.so",     "manylinux2014_aarch64.manylinux_2_17_aarch64"),
@@ -63,6 +64,87 @@ PLATFORMS = [
     ("macos-aarch64",  "libzit.dylib",  "macosx_11_0_arm64"),
     ("windows-x86_64", "zit.dll",       "win_amd64"),
 ]
+
+
+def _glibc_versions(data: bytes) -> list[tuple[int, ...]]:
+    """Read required symbol versions from ELF64's SHT_GNU_verneed section."""
+    if data[:6] != b"\x7fELF\x02\x01":
+        raise ValueError("expected a little-endian ELF64 binary")
+    shoff = struct.unpack_from("<Q", data, 40)[0]
+    shsize, shnum = struct.unpack_from("<HH", data, 58)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shsize)
+                for i in range(shnum)]
+    versions = []
+    for section in sections:
+        if section[1] != 0x6FFFFFFE:  # SHT_GNU_verneed
+            continue
+        strings_section = sections[section[6]]
+        strings = data[strings_section[4]:strings_section[4] + strings_section[5]]
+        offset, end = section[4], section[4] + section[5]
+        while offset < end:
+            _, count, _, aux, next_need = struct.unpack_from("<HHIII", data, offset)
+            cursor = offset + aux
+            for _ in range(count):
+                _, _, _, name, next_aux = struct.unpack_from("<IHHII", data, cursor)
+                version = strings[name:strings.index(b"\0", name)].decode("ascii")
+                if version.startswith("GLIBC_"):
+                    suffix = version.removeprefix("GLIBC_")
+                    if not re.fullmatch(r"\d+(?:\.\d+)+", suffix):
+                        raise ValueError(f"unsupported glibc requirement: {version}")
+                    versions.append(tuple(map(int, suffix.split("."))))
+                cursor += next_aux
+            if not next_need:
+                break
+            offset += next_need
+    if not versions:
+        raise ValueError("no glibc version requirements found")
+    return versions
+
+
+def _macos_minimum(data: bytes) -> tuple[int, int, int]:
+    """Read the deployment version from either Mach-O load-command format."""
+    if data[:4] != b"\xcf\xfa\xed\xfe":
+        raise ValueError("expected a little-endian Mach-O 64-bit binary")
+    ncmds = struct.unpack_from("<I", data, 16)[0]
+    offset = 32
+    versions = []
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from("<II", data, offset)
+        if size < 8 or offset + size > len(data):
+            raise ValueError("invalid Mach-O load command")
+        if cmd in (0x24, 0x32):  # LC_VERSION_MIN_MACOSX / LC_BUILD_VERSION
+            if cmd == 0x32 and struct.unpack_from("<I", data, offset + 8)[0] != 1:
+                raise ValueError("expected the macOS platform")
+            version = struct.unpack_from("<I", data, offset + (8 if cmd == 0x24 else 12))[0]
+            versions.append((version >> 16, version >> 8 & 255, version & 255))
+        offset += size
+    if not versions:
+        raise ValueError("no macOS deployment version found")
+    return max(versions)
+
+
+def validate_binary(data: bytes, plat_tag: str) -> None:
+    """Reject binaries requiring a newer OS/libc than their wheel tag allows."""
+    for tag in plat_tag.split("."):
+        if tag.startswith("manylinux"):
+            if tag.startswith("manylinux2014_"):
+                minimum = (2, 17)
+            else:
+                match = re.fullmatch(r"manylinux_(\d+)_(\d+)_(.+)", tag)
+                if match is None:
+                    raise ValueError(f"unsupported platform tag: {tag}")
+                minimum = tuple(map(int, match.groups()[:2]))
+            required = max(_glibc_versions(data))
+        elif tag.startswith("macosx_"):
+            _, major, minor, _ = tag.split("_", 3)
+            minimum = (int(major), int(minor), 0)
+            required = _macos_minimum(data)
+        elif tag == "win_amd64":
+            continue
+        else:
+            raise ValueError(f"unsupported platform tag: {tag}")
+        if required > minimum:
+            raise ValueError(f"binary requires {required}, newer than wheel tag {tag}")
 
 
 def _read(p: Path) -> bytes:
@@ -137,6 +219,7 @@ def build_wheel(zig_dir: str, binname: str, plat_tag: str) -> Path:
     out = DIST / wheel_filename
 
     bin_data = _read(src)
+    validate_binary(bin_data, plat_tag)
     license_data = _read(ROOT / "LICENSE")
     metadata = _metadata().encode("utf-8")
     wheel = _wheel_file(plat_tag).encode("utf-8")

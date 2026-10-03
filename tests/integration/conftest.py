@@ -39,14 +39,9 @@ def core():
         pytest.skip(msg)
     c = vs.core
     # Pin to a single worker thread for the whole suite. These are
-    # correctness/oracle tests, not concurrency stress: determinism matters
-    # more than speed. VapourSynth's parallel prefetch can run a node's
-    # arAllFramesReady calls out of request order, and IT caches cross-frame
-    # decisions lazily (frame_info/block_info) — so multi-threaded prefetch
-    # can, very rarely, surface an access-order-dependent decimation and make
-    # the upstream-comparison flake. One thread = strictly sequential =
-    # reproducible. (Order-independence of the *output* itself is asserted
-    # separately in test_determinism.py.)
+    # correctness/oracle tests. Keep the upstream reference sequential;
+    # test_determinism.py explicitly enables multiple workers and shuffled
+    # asynchronous requests when testing zit's request-order independence.
     c.num_threads = 1
     # VapourSynth refuses to load the same plugin twice; check first.
     already_loaded = any(p.namespace == "zit" for p in c.plugins())

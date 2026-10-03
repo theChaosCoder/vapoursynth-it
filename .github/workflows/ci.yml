@@ -49,6 +49,9 @@ jobs:
       - name: List built artefacts
         run: find zig-out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | sort
 
+      - name: Check binary deployment and VapourSynth API compatibility
+        run: python3 -m unittest discover -s tests/packaging -v
+
       - uses: actions/upload-artifact@v5
         with:
           name: libzit-linux-x86_64

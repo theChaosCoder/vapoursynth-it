@@ -4,13 +4,10 @@
 //! file is the glue that wires VS frame fetches to the algorithm primitives
 //! and maintains the cross-frame state (`frame_info`, `block_info`).
 //!
-//! Threading mode: `fmParallelRequests`. VapourSynth serializes only the
-//! `arAllFramesReady` calls per instance — `arInitial` (the
-//! `requestNeededFrames` path) runs CONCURRENTLY from multiple worker
-//! threads and must therefore stay read-only on the instance (it only reads
-//! create-time-immutable fields today; keep it that way). All mutation of
-//! the shared state (`frame_info`, `block_info`, `call_state`, scratch
-//! maps) happens exclusively on the serialized `arAllFramesReady` path.
+//! Threading mode: `fmUnordered`. Request planning reads the shared analysis
+//! cursor, so all callbacks must be serialized. Decimation blocks are always
+//! decided in source order, independently of the output request order. A seek
+//! analyzes missing predecessors in bounded batches and caches their decisions.
 
 const std = @import("std");
 const vapoursynth = @import("vapoursynth");
@@ -105,6 +102,21 @@ inline fn toUpper(ch: u8) u8 {
     return if (ch >= 'a' and ch <= 'z') ch - 32 else ch;
 }
 
+fn outputVideoInfo(source: *const vs.VideoInfo, fps: i32) !vs.VideoInfo {
+    var vi = source.*;
+    if (fps == 24) {
+        vi.numFrames = @intCast(@divTrunc(@as(i64, vi.numFrames) * 4, 5));
+        // Reduce the complete fraction before checking the i64 API limits.
+        // Wide intermediates also cover rates whose unreduced product overflows.
+        const num = @as(u128, @intCast(vi.fpsNum)) * 4;
+        const den = @as(u128, @intCast(vi.fpsDen)) * 5;
+        const divisor = std.math.gcd(num, den);
+        vi.fpsNum = std.math.cast(i64, num / divisor) orelse return error.FrameRateOverflow;
+        vi.fpsDen = std.math.cast(i64, den / divisor) orelse return error.FrameRateOverflow;
+    }
+    return vi;
+}
+
 // ---------------------------------------------------------------------------
 // Filter instance
 // ---------------------------------------------------------------------------
@@ -145,6 +157,9 @@ pub const Filter = struct {
 
     frame_info: []state.CFrameInfo,
     block_info: []state.CTFblockInfo,
+    /// First undecided block, in input-frame coordinates. i64 allows the
+    /// cursor to advance past a final block near the VS i32 frame limit.
+    next_analysis_base: i64 = 0,
     call_state: state.CallState,
 
     allocator: std.mem.Allocator,
@@ -160,6 +175,7 @@ pub const Filter = struct {
         blend: bool,
         dimode: DiMode,
     ) !*Filter {
+        const vi = try outputVideoInfo(vi_src, fps);
         const max_frames = vi_src.numFrames;
         const width = vi_src.width;
         const height = vi_src.height;
@@ -187,7 +203,7 @@ pub const Filter = struct {
         const self = try allocator.create(Filter);
         self.* = .{
             .node = node,
-            .vi = vi_src.*,
+            .vi = vi,
             .fps = fps,
             .threshold = threshold,
             .pthreshold = pthreshold,
@@ -219,18 +235,6 @@ pub const Filter = struct {
             },
             .allocator = allocator,
         };
-
-        // 24fps mode: rescale numFrames/fps the same way upstream does.
-        // (i64 intermediate: numFrames * 4 can overflow i32.)
-        if (self.fps == 24) {
-            self.vi.numFrames = @intCast(@divTrunc(@as(i64, self.vi.numFrames) * 4, 5));
-            self.vi.fpsNum *= 4;
-            if (@mod(self.vi.fpsNum, 5) == 0) {
-                self.vi.fpsNum = @divTrunc(self.vi.fpsNum, 5);
-            } else {
-                self.vi.fpsDen *= 5;
-            }
-        }
 
         return self;
     }
@@ -350,8 +354,11 @@ pub fn create(
         ref_val,
         blend,
         dimode_val,
-    ) catch {
-        map_out.setError("IT: out of memory");
+    ) catch |err| {
+        map_out.setError(if (err == error.FrameRateOverflow)
+            "IT: output frame rate exceeds the 64-bit VapourSynth limits"
+        else
+            "IT: out of memory");
         zapi.freeNode(node);
         return;
     };
@@ -360,7 +367,7 @@ pub fn create(
         .{ .source = node, .requestPattern = .General },
     };
 
-    zapi.createVideoFilter(out, "IT", &inst.vi, getFrame, free, .ParallelRequests, &deps, inst);
+    zapi.createVideoFilter(out, "IT", &inst.vi, getFrame, free, .Unordered, &deps, inst);
 }
 
 fn free(
@@ -373,6 +380,11 @@ fn free(
     zapi.freeNode(inst.node);
     inst.destroy();
 }
+
+const FrameRequest = struct {
+    /// null means the requested sources are for rendering the output frame.
+    analysis_base: ?i32 = null,
+};
 
 fn getFrame(
     n: c_int,
@@ -387,12 +399,24 @@ fn getFrame(
     // each SIMD helper's comptime branch (std.math.Log2Int, splat-type
     // derivation) adds up well past the default 1000 budget.
     @setEvalBranchQuota(600000);
-    _ = frame_data;
     const inst: *Filter = @ptrCast(@alignCast(instance_data.?));
     const zapi = ZAPI.init(vsapi, core, frame_ctx);
 
     if (activation_reason == .Initial) {
-        requestNeededFrames(inst, &zapi, n);
+        const request = inst.allocator.create(FrameRequest) catch {
+            zapi.setFilterError("IT: out of memory");
+            return null;
+        };
+        frame_data.* = request;
+        requestNextBatch(inst, &zapi, n, request);
+        return null;
+    }
+    if (activation_reason == .Error) {
+        if (frame_data.*) |data| {
+            const request: *FrameRequest = @ptrCast(@alignCast(data));
+            inst.allocator.destroy(request);
+            frame_data.* = null;
+        }
         return null;
     }
     if (activation_reason != .AllFramesReady) return null;
@@ -401,19 +425,37 @@ fn getFrame(
     // pixel pipeline. validateInput guarantees `bits` is one of 8/10/12/16.
     return switch (inst.bits) {
         8 => switch (inst.cs) {
-            inline else => |c| getFrameImpl(u8, 8, c, inst, &zapi, n),
+            inline else => |c| getFrameRequest(u8, 8, c, inst, &zapi, n, frame_data),
         },
         10 => switch (inst.cs) {
-            inline else => |c| getFrameImpl(u16, 10, c, inst, &zapi, n),
+            inline else => |c| getFrameRequest(u16, 10, c, inst, &zapi, n, frame_data),
         },
         12 => switch (inst.cs) {
-            inline else => |c| getFrameImpl(u16, 12, c, inst, &zapi, n),
+            inline else => |c| getFrameRequest(u16, 12, c, inst, &zapi, n, frame_data),
         },
         16 => switch (inst.cs) {
-            inline else => |c| getFrameImpl(u16, 16, c, inst, &zapi, n),
+            inline else => |c| getFrameRequest(u16, 16, c, inst, &zapi, n, frame_data),
         },
         else => unreachable,
     };
+}
+
+fn getFrameRequest(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32, frame_data: *?*anyopaque) ?*const vs.Frame {
+    const request: *FrameRequest = @ptrCast(@alignCast(frame_data.*.?));
+    if (request.analysis_base) |base| {
+        // Another pending output request may already have decided this block.
+        analyzeBlock(T, bits, cs, inst, zapi, base);
+        var i = @max(0, base - 1);
+        const last = @min(@as(i64, base) + 5, inst.max_frames - 1);
+        while (i <= last) : (i += 1) zapi.releaseFrameEarly(inst.node, i);
+        requestNextBatch(inst, zapi, n, request);
+        return null;
+    }
+    defer {
+        inst.allocator.destroy(request);
+        frame_data.* = null;
+    }
+    return getFrameImpl(T, bits, cs, inst, zapi, n);
 }
 
 fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32) ?*const vs.Frame {
@@ -462,6 +504,22 @@ fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSa
 // ---------------------------------------------------------------------------
 // Frame-request planning
 // ---------------------------------------------------------------------------
+
+fn requestNextBatch(inst: *Filter, zapi: *const ZAPI, out_n: i32, request: *FrameRequest) void {
+    const base = @divTrunc(@as(i64, out_n), 4) * 5;
+    if (inst.fps == 24 and inst.next_analysis_base < base) {
+        const first: i32 = @intCast(inst.next_analysis_base);
+        request.analysis_base = first;
+        // Analysis alone needs only ChooseBest's one-frame halo. Release
+        // each batch before requesting the next so a seek cannot pin the clip.
+        var i = @max(0, first - 1);
+        const last = @min(@as(i64, first) + 5, inst.max_frames - 1);
+        while (i <= last) : (i += 1) zapi.requestFrameFilter(i, inst.node);
+    } else {
+        request.analysis_base = null;
+        requestNeededFrames(inst, zapi, out_n);
+    }
+}
 
 fn requestNeededFrames(inst: *Filter, zapi: *const ZAPI, out_n: i32) void {
     // Frame-reach analysis (worst case):
@@ -634,10 +692,10 @@ inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.Chro
     return true;
 }
 
-inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
-    const tf = out_n + @divTrunc(out_n, 4);
-    const base = @divTrunc(tf, 5) * 5;
-
+fn analyzeBlock(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, base: i32) void {
+    if (base < inst.next_analysis_base) return;
+    std.debug.assert(base == inst.next_analysis_base);
+    inst.call_state.resetForFrame(base);
     var i: i32 = 0;
     while (i < 5) : (i += 1) {
         getFrameSub(T, bits, cs, inst, zapi, base + i);
@@ -652,9 +710,16 @@ inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, comptime cs: 
     }
     const bidx: usize = @intCast(@divTrunc(base, 5));
     inst.block_info[bidx].itype = if (iflag) '3' else '2';
+    inst.next_analysis_base += 5;
+}
+
+inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
+    const tf = out_n + @divTrunc(out_n, 4);
+    const base = @divTrunc(tf, 5) * 5;
+    analyzeBlock(T, bits, cs, inst, zapi, base);
 
     var no: i32 = tf - base;
-    i = 0;
+    var i: i32 = 0;
     while (i < 5) : (i += 1) {
         const idx: usize = @intCast(plane.clipFrame(base + i, inst.max_frames));
         const f = inst.frame_info[idx].mflag;

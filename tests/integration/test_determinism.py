@@ -9,11 +9,9 @@ result.
 Why it matters: under VapourSynth's parallel prefetch a node's
 `arAllFramesReady` calls can run out of request order. If any cross-frame
 state read depended on that order, the output would change run-to-run and
-surface as a rare flaky mismatch (e.g. against the upstream oracle). One
-latent order-sensitive read exists today — `decide()`'s previous-block lookup
-(`block_info[base/5 - 1]`) — but it must not change the emitted frames; this
-test is the regression guard that keeps it (and any future cross-frame state)
-honest.
+surface as a rare flaky mismatch (e.g. against the upstream oracle).
+`decide()` inherits the previous block's drop position, so the filter must
+analyze missing predecessors in source order before emitting a later block.
 
 Each access order is run on a **fresh** IT node so its internal cache starts
 empty and is filled purely in that order.
@@ -22,8 +20,10 @@ empty and is filled purely in that order.
 from __future__ import annotations
 
 import hashlib
+import random
 
 import pytest
+import vapoursynth as vs
 
 import gen_testclip
 
@@ -74,3 +74,72 @@ def test_output_is_access_order_independent(core, fixture, fps, blend):
                 f"but '{baseline_name}' produced {baseline} — output depends on "
                 f"frame request order (non-deterministic under prefetch)"
             )
+
+
+@pytest.mark.parametrize("length", [15, 60])
+@pytest.mark.parametrize("blend", [0, 1])
+@pytest.mark.parametrize("bits", [8, 16])
+def test_ambiguous_blocks_inherit_cadence_in_every_request_order(core, length, blend, bits):
+    # Block 1 drops index 2; the following low-motion blocks must inherit
+    # that choice even when requested before any of their predecessors.
+    values = [20, 60, 100, 140, 180, 220, 40, 41, 80, 120]
+    values += list(range(121, 121 + length - len(values)))
+    scale = 1 << (bits - 8)
+    source = core.std.Splice([
+        core.std.BlankClip(width=128, height=96, length=1,
+                           format=vs.YUV420P8 if bits == 8 else vs.YUV420P16,
+                           fpsnum=30000, fpsden=1001,
+                           color=[v * scale, 128 * scale, 128 * scale])
+        for v in values
+    ])
+
+    def fresh():
+        return core.zit.IT(source, blend=blend)
+
+    def signature(frame):
+        return b"".join(bytes(frame[p]) for p in range(3)), dict(frame.props)
+
+    baseline_node = fresh()
+    baseline = [signature(baseline_node.get_frame(n))
+                for n in range(baseline_node.num_frames)]
+    if bits == 8 and blend == 0:
+        assert [pixels[0] for pixels, _ in baseline[:12]] == [
+            60, 100, 140, 180, 220, 40, 80, 120, 121, 122, 124, 125,
+        ]
+
+    for order_fn in ORDERS.values():
+        node = fresh()
+        actual = {n: signature(node.get_frame(n))
+                  for n in order_fn(node.num_frames)}
+        assert [actual[n] for n in range(node.num_frames)] == baseline
+
+    threads = core.num_threads
+    try:
+        core.num_threads = 4
+        node = fresh()
+        order = list(range(node.num_frames))
+        random.Random(42).shuffle(order)
+        futures = {n: node.get_frame_async(n) for n in order}
+        assert [signature(futures[n].result(timeout=30))
+                for n in range(node.num_frames)] == baseline
+    finally:
+        core.num_threads = threads
+
+
+def test_source_error_during_seek_does_not_poison_analysis(core):
+    source = core.std.BlankClip(width=128, height=96, length=30,
+                               format=vs.YUV420P8)
+    fail = True
+
+    def evaluate(n, f):
+        if fail and n == 8:
+            raise vs.Error("intentional analysis source failure")
+        return f
+
+    output = core.zit.IT(core.std.ModifyFrame(source, source, evaluate))
+    with pytest.raises(vs.Error, match="intentional analysis source failure"):
+        output.get_frame(output.num_frames - 1)
+    fail = False
+    recovered = _clip_hash(output, ORDERS["reversed"](output.num_frames))
+    reference = core.zit.IT(source)
+    assert recovered == _clip_hash(reference, range(reference.num_frames))

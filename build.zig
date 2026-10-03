@@ -10,6 +10,8 @@ pub fn build(b: *std.Build) void {
     const vapoursynth_dep = b.dependency("vapoursynth", .{
         .target = target,
         .optimize = optimize,
+        // Keep the declared R55 minimum: no API 4.1 functions are needed.
+        .vsapi4_minor = .minor_0,
     });
     const vapoursynth_mod = vapoursynth_dep.module("vapoursynth");
 
@@ -52,6 +54,7 @@ pub fn build(b: *std.Build) void {
     const test_vapoursynth_dep = b.dependency("vapoursynth", .{
         .target = test_target,
         .optimize = optimize,
+        .vsapi4_minor = .minor_0,
     });
 
     const tests_mod = b.createModule(.{
@@ -74,11 +77,13 @@ pub fn build(b: *std.Build) void {
     // (OS, arch) tuples. Each target is installed under `zig-out/<name>/`.
     const cross_step = b.step("cross", "Build release artifacts for Linux/macOS/Windows (x86_64 + ARM64)");
 
+    // These explicit deployment baselines must match the wheel tags in
+    // scripts/build_pypi_wheels.py; compiler defaults change between releases.
     const cross_targets = .{
-        .{ .name = "linux-x86_64", .triple = "x86_64-linux-gnu" },
-        .{ .name = "linux-aarch64", .triple = "aarch64-linux-gnu" },
-        .{ .name = "macos-x86_64", .triple = "x86_64-macos" },
-        .{ .name = "macos-aarch64", .triple = "aarch64-macos" },
+        .{ .name = "linux-x86_64", .triple = "x86_64-linux-gnu.2.17" },
+        .{ .name = "linux-aarch64", .triple = "aarch64-linux-gnu.2.17" },
+        .{ .name = "macos-x86_64", .triple = "x86_64-macos.10.9" },
+        .{ .name = "macos-aarch64", .triple = "aarch64-macos.11.0" },
         .{ .name = "windows-x86_64", .triple = "x86_64-windows-gnu" },
     };
 
@@ -89,6 +94,7 @@ pub fn build(b: *std.Build) void {
         const cross_vs_dep = b.dependency("vapoursynth", .{
             .target = cross_target,
             .optimize = .fast,
+            .vsapi4_minor = .minor_0,
         });
         const cross_mod = b.createModule(.{
             .root_source_file = b.path("src/plugin.zig"),

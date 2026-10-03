@@ -8,7 +8,7 @@
 //! Generic over the pixel type via `anytype` — the supported set is any
 //! unsigned integer (u8 for 8-bit, u16 for 10/12/16-bit pixel storage).
 //! Element type is inferred from the arguments; widening for `pavgb` is
-//! `std.meta.Int(.unsigned, bitSize*2)`.
+//! `@Int(.unsigned, bitSize*2)`.
 
 const std = @import("std");
 
@@ -27,7 +27,7 @@ pub inline fn subSat(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
 /// double-width internally to avoid overflow.
 pub inline fn pavgb(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
     const T = @TypeOf(a);
-    const WideT = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const WideT = @Int(.unsigned, @bitSizeOf(T) * 2);
     return @intCast((@as(WideT, a) + @as(WideT, b) + 1) >> 1);
 }
 

@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Build dependencies
+
+- Upgrade the Zig toolchain from 0.16.0 to 0.17.0, including CI and
+  release builds; migrate optimization mode names, integer types to `@Int`,
+  and array initialization to `@splat`.
+- Update `vapoursynth-zig` from `92b8545` to `b87ff61` (2026-06-20),
+  including corrected C API signatures and wrapper fixes.
+
 ## [1.4.0] — 2026-06-10
 
 Feature release: high bit depth and additional chroma samplings, plus the

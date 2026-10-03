@@ -232,7 +232,7 @@ test "clipX / clipY clamp" {
 }
 
 test "syp luma is just y * stride" {
-    var buf = [_]u8{0} ** (480 * 720);
+    var buf: [480 * 720]u8 = @splat(0);
     buf[5 * 720 + 10] = 0xAA;
     const ptr = syp(@as([*]const u8, &buf), 720, 480, 0, 5);
     try std.testing.expectEqual(@as(u8, 0xAA), ptr[10]);
@@ -243,7 +243,7 @@ test "syp chroma uses ((y>>2)<<1)+(y%2) mapping for 4:2:0" {
     // For y=5 in chroma: ((5>>2)<<1) + (5%2) = 2 + 1 = row 3
     // For y=7 in chroma: ((7>>2)<<1) + (7%2) = 2 + 1 = row 3
     // For y=8 in chroma: ((8>>2)<<1) + (8%2) = 4 + 0 = row 4
-    var buf = [_]u8{0} ** (240 * 360);
+    var buf: [240 * 360]u8 = @splat(0);
     buf[2 * 360 + 0] = 0x11;
     buf[3 * 360 + 0] = 0x22;
     buf[4 * 360 + 0] = 0x33;
@@ -255,7 +255,7 @@ test "syp chroma uses ((y>>2)<<1)+(y%2) mapping for 4:2:0" {
 }
 
 test "sypChroma 4:2:0 matches syp(plane!=0)" {
-    var buf = [_]u8{0} ** (240 * 360);
+    var buf: [240 * 360]u8 = @splat(0);
     buf[2 * 360 + 0] = 0x11;
     buf[3 * 360 + 0] = 0x22;
     const ptr: [*]const u8 = &buf;
@@ -264,7 +264,7 @@ test "sypChroma 4:2:0 matches syp(plane!=0)" {
 }
 
 test "sypChroma 4:4:4 maps row 1-to-1 with luma" {
-    var buf = [_]u8{0} ** (480 * 720);
+    var buf: [480 * 720]u8 = @splat(0);
     buf[5 * 720 + 10] = 0xCC;
     const ptr: [*]const u8 = &buf;
     // 4:4:4: chroma row = luma row, no interleave.
@@ -272,7 +272,7 @@ test "sypChroma 4:4:4 maps row 1-to-1 with luma" {
 }
 
 test "sypChroma 4:2:2 maps row 1-to-1 with luma (full height, no interleave)" {
-    var buf = [_]u8{0} ** (480 * 720);
+    var buf: [480 * 720]u8 = @splat(0);
     buf[5 * 720 + 10] = 0xCC;
     const ptr: [*]const u8 = &buf;
     // 4:2:2 is vertically full-rate, so chroma row = luma row like 4:4:4.

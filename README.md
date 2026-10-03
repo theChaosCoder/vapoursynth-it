@@ -109,7 +109,8 @@ Convention follows VFM/VDecimate (camelCase, plugin-name prefix, no dots
 
 ## Building from source
 
-Requires Zig 0.16.0+. The VapourSynth API 4 bindings come from the
+Requires Zig 0.17.0 (also used by CI and release builds). The VapourSynth
+API 4 bindings come from the
 [`vapoursynth-zig`](https://github.com/dnjulek/vapoursynth-zig) package
 pinned in `build.zig.zon`.
 

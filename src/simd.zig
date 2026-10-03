@@ -17,7 +17,7 @@ const std = @import("std");
 /// to avoid overflow, then narrows back to the input element type.
 pub inline fn pavgb(comptime N: usize, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
     const T = std.meta.Child(@TypeOf(a));
-    const WideT = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const WideT = @Int(.unsigned, @bitSizeOf(T) * 2);
     const ShiftT = std.math.Log2Int(WideT);
     const a_w: @Vector(N, WideT) = a;
     const b_w: @Vector(N, WideT) = b;

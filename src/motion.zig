@@ -174,7 +174,7 @@ pub fn makeMotionMap(
     const widthminus8: i32 = width - 8;
     const widthminus16: i32 = width - 16;
     // Signed wide-enough type for pixel diffs (i16 for u8, i32 for u16).
-    const Wide = std.meta.Int(.signed, @bitSizeOf(T) * 2);
+    const Wide = @Int(.signed, @bitSizeOf(T) * 2);
     const max_pix: Wide = (1 << bits) - 1; // comptime_int -> Wide; = 2^bits - 1
     // Pass2 SIMD width = 32 bytes / sizeof(Wide).
     const P2_LANES: usize = 32 / @sizeOf(Wide);
@@ -236,7 +236,7 @@ pub fn makeMotionMap(
                 const s_u8 = if (T == u8)
                     @as(@Vector(LANES, u8), @intCast(s_clamped))
                 else blk: {
-                    const ShiftT = std.math.Log2Int(std.meta.Int(.unsigned, @bitSizeOf(Wide)));
+                    const ShiftT = std.math.Log2Int(@Int(.unsigned, @bitSizeOf(Wide)));
                     const shifted = s_clamped >> @as(@Vector(LANES, ShiftT), @splat(bits - 8));
                     break :blk @as(@Vector(LANES, u8), @intCast(shifted));
                 };

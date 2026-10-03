@@ -60,7 +60,7 @@ pub fn buildKernel(n_minus_base: i32) Kernel {
     }
 
     // Second pass: rounded integer weights summing (approximately) to 256.
-    var k: Kernel = .{ .start = start, .size = size, .weights = [_]i32{0} ** 16 };
+    var k: Kernel = .{ .start = start, .size = size, .weights = @splat(0) };
     var t2: f64 = 0.0;
     var i: i32 = 0;
     while (i < size) : (i += 1) {

@@ -363,7 +363,7 @@ inline fn deinterlacePixelScalar(
     precomp: LumaScores(T),
 ) void {
     const xh = plane.chromaCol(cs, x);
-    const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const Wide = @Int(.unsigned, @bitSizeOf(T) * 2);
     const iv_th: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
 
     // Luma IV scores: C / P / N / avg(C,P) / avg(C,N) all against (T, B).
@@ -492,7 +492,7 @@ pub inline fn deinterlace(
 
     const row_y: usize = w;
     const row_uv: usize = @intCast(plane.chromaWidth(cs, width));
-    const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const Wide = @Int(.unsigned, @bitSizeOf(T) * 2);
     const ShiftT = std.math.Log2Int(Wide);
     const iv_th_val: T = comptime @intCast(@as(u32, 8) << @intCast(bits - 8));
 
@@ -730,7 +730,7 @@ pub inline fn simpleBlur(
     const w: usize = @intCast(width);
     const h: usize = @intCast(height);
     std.debug.assert(motion4di.len == w * h);
-    const Wide = std.meta.Int(.unsigned, @bitSizeOf(T) * 2);
+    const Wide = @Int(.unsigned, @bitSizeOf(T) * 2);
     const ShiftT = std.math.Log2Int(Wide);
 
     // Pass 1: count motion-tagged pixels in the u8 map. Threshold 4 stays.

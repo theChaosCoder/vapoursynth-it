@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{
-        .preferred_optimize_mode = .ReleaseFast,
+        .preferred_optimize_mode = .fast,
     });
 
     const vapoursynth_dep = b.dependency("vapoursynth", .{
@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
         // instance is internally single-threaded (no std.Thread / atomics
         // / Mutex), so we let the compiler elide TLS/atomic codegen.
         .single_threaded = true,
-        .strip = optimize == .ReleaseFast,
+        .strip = optimize == .fast,
     });
     lib_mod.addImport("vapoursynth", vapoursynth_mod);
 
@@ -88,12 +88,12 @@ pub fn build(b: *std.Build) void {
         );
         const cross_vs_dep = b.dependency("vapoursynth", .{
             .target = cross_target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
         });
         const cross_mod = b.createModule(.{
             .root_source_file = b.path("src/plugin.zig"),
             .target = cross_target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
             .link_libc = true,
             .single_threaded = true,
             .strip = true,

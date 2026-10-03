@@ -585,7 +585,7 @@ inline fn blendInto(comptime T: type, comptime bits: u8, comptime cs: plane.Chro
     const size: usize = @intCast(kernel.size);
 
     var srcs: [16]blend_mod.SourceView(T) = undefined;
-    var temps: [16]?*vs.Frame = .{null} ** 16;
+    var temps: [16]?*vs.Frame = @splat(null);
     defer for (temps[0..size]) |t| if (t) |f| zapi.freeFrame(f);
 
     var z: usize = 0;

@@ -164,20 +164,70 @@ and drop the binary into a VapourSynth plugin directory:
 
 ## Performance
 
-500 frames of a 720×480 NTSC telecined VOB, ReleaseFast build:
+Measured 2026-10-03 on an AMD Ryzen 5 9600X, VapourSynth **R81RC1 / API 4.3**,
+Python 3.14.7, Zig 0.17.0 ReleaseFast/native (`fmUnordered`), and the
+`vapoursynth-vivtc` 2.0 wheel. Both VOBs are 720×480 YUV420P8 at 30000/1001
+fps. VIVTC was refreshed with `uv pip`; 2.0 remains the latest PyPI release.
+The zit and VIVTC binary hashes are identical to the earlier R76 benchmark.
 
-| Pipeline | fps |
-| --- | --- |
-| `core.zit.IT(clip, fps=30)` | **2697** |
-| `core.zit.IT(clip, fps=24)` | 2236 |
-| `core.zit.IT(clip, fps=24, diMode=1)` | 2355 |
-| `core.zit.IT(clip, fps=24, diMode=2)` | 2459 |
-| `core.zit.IT(clip, fps=24, blend=1)` | 1725 |
-| `core.vivtc.VFM(clip, order=1)` | 596 |
-| `core.vivtc.VFM` → `core.vivtc.VDecimate` | 1271 |
+Median **output frames/second** over five runs. Each run uses a fresh filter
+chain and processes 3000 input frames after a 250-input-frame warmup, starting
+at input frame 9000. Source frames are predecoded and held in a fixed cache;
+the benchmark asserts that no source evaluation occurs during the runs.
+Timing includes bounded asynchronous frame requests (prefetch equals the
+worker count), without encoding, pixel copying, or hashing. Run order is
+randomized. These are filter-throughput measurements, not encode speeds.
 
-`zit fps=30` is ~4.5× faster than `vivtc.VFM`; `zit fps=24` is ~1.8×
-faster than `vivtc.VFM + VDecimate`.
+| Source | VS workers | zit fps=30 | VFM | zit fps=24 | VFM → VDecimate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `eyeVTS_01_1.VOB` | 1 | 6732 | 986 | 5815 | 775 |
+| `eyeVTS_01_1.VOB` | 8 | 8078 | 4757 | 6748 | 3360 |
+| `gbVTS_01_1.VOB` | 1 | 4097 | 810 | 3430 | 632 |
+| `gbVTS_01_1.VOB` | 8 | 4517 | 4219 | 3741 | 3053 |
+
+VFM uses `order=1, field=1`, otherwise defaults; VDecimate uses defaults.
+The main zit columns include its default deinterlacing fallback (`diMode=3`).
+[VFM has no such postprocessing](https://github.com/vapoursynth/vivtc#vivtc).
+With zit's fallback disabled (`fps=30, diMode=0`), the eight-worker results
+are **8051 fps** (eye) and **7870 fps** (gb), respectively 1.69× and 1.87×
+VFM. This is a throughput comparison between different algorithms, not an
+image-quality or pixel-equivalence claim.
+
+Both plugins run on the CPU. VFM uses `fmParallel` and scales substantially
+with multiple workers; zit's processing remains serialized. With eight
+workers, default zit field matching is 1.70× VFM on eye and 1.07× on gb.
+The full zit IVTC pipeline is 2.01× / 1.23× VFM → VDecimate on these clips.
+The cached-source control measured 57–59k fps, well above the filter rates.
+
+Compared with the [R76 measurements](docs/benchmarks/2026-10-03-vivtc.json),
+the median throughput changed as follows (same input interval, parameters,
+plugin binaries, Python version, and request scheduling in the harness):
+
+| Source | VS workers | zit fps=30 | VFM | zit fps=24 | VFM → VDecimate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| eye | 1 | −9.8% | −4.2% | −8.3% | −2.5% |
+| eye | 8 | +11.0% | −1.4% | +6.8% | +0.2% |
+| gb | 1 | −7.1% | −3.4% | −6.2% | −2.7% |
+| gb | 8 | +4.7% | +2.9% | +3.8% | −1.0% |
+
+These are observations from two benchmark batches, not isolated kernel
+measurements. Small changes, particularly the multi-worker VFM results,
+overlap the observed run ranges. All 200 integration tests also pass on R81RC1.
+
+[R81RC1 raw measurements, ranges, and binary hashes](docs/benchmarks/2026-10-03-vivtc-r81rc1.json)
+are recorded alongside the reproducible harness. To use the same runtime
+(Python 3.12+ required):
+
+```bash
+zig build --release=fast
+uv pip install --python .venv/bin/python --upgrade "VapourSynth==81rc1" vapoursynth-vivtc
+.venv/bin/python scripts/bench_vivtc.py /path/to/eyeVTS_01_1.VOB /path/to/gbVTS_01_1.VOB \
+  --json build/bench_vivtc_r81rc1.json
+```
+
+VIVTC is autoloaded from the environment. For a separate binary, pass
+`--vivtc-plugin /path/to/vivtc.so`; the harness records the loaded file's hash
+and rejects an explicit path that differs from an already loaded plugin.
 
 ## Differences from the VapourSynth upstream
 

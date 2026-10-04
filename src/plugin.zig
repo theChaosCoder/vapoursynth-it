@@ -13,7 +13,7 @@ const filter = @import("filter.zig");
 const PLUGIN_ID = "com.thechaoscoder.zit";
 const PLUGIN_NAMESPACE = "zit";
 const PLUGIN_NAME = "VapourSynth IVTC Filter (Zig port)";
-const PLUGIN_VERSION = std.SemanticVersion{ .major = 1, .minor = 4, .patch = 0 };
+const PLUGIN_VERSION = std.SemanticVersion{ .major = 1, .minor = 5, .patch = 0 };
 
 comptime {
     // Enforce the R55 minimum for native, test, and cross builds alike.

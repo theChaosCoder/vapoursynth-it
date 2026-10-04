@@ -1,0 +1,2066 @@
+{
+  "created_utc": "2026-10-03T18:44:47.979778+00:00",
+  "cpu": "AMD Ryzen 5 9600X 6-Core Processor",
+  "platform": "Linux-7.2.8-1-cachyos-x86_64-with-glibc2.44",
+  "python": "3.14.7",
+  "vapoursynth": "VapourSynth Video Processing Library\nCopyright (c) 2012-2025 Fredrik Mellbin\n\tCore R76\n\tAPI R4.2\n\tAPI R3.6\n\tOptions: -\n\tNumber of Threads: 12\n\tMax Cache Size: 4096\n",
+  "zig": "0.17.0",
+  "git_commit": "84832dedbaefbe586dbecd1bda84da0e45126330",
+  "zit_binary": {
+    "path": "/home/anatolij/dev/zit/zig-out/lib/libzit.so",
+    "sha256": "db977c91f946da7f201d08881c4f1081194f4f86cf691a8f41b78f79948d23bb"
+  },
+  "vivtc_binary": {
+    "path": "/home/anatolij/dev/zit/encode_test/.venv/lib/python3.14/site-packages/vapoursynth/plugins/vivtc.so",
+    "sha256": "2fd33e8290423d5e4285169d9788f6d4e161ba1a9fc5dc6038c71d811d909921"
+  },
+  "plugin_versions": {
+    "zit": "1.4",
+    "bs": "18.0",
+    "vivtc": "1.0"
+  },
+  "parameters": {
+    "start": 9000,
+    "input_frames": 3000,
+    "warmup_input_frames": 250,
+    "runs": 5,
+    "threads": [
+      1,
+      8
+    ],
+    "prefetch": "equal to thread count",
+    "vfm": {
+      "order": 1,
+      "field": 1
+    },
+    "cache_mib": 4096
+  },
+  "method": "Predecoded source cache; fresh filter nodes each run; randomized run order; warmup excluded; no pixel copies, hashing, encoding, or concurrent benchmarks.",
+  "samples": [
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.4122426079993602,
+      "output_fps": 7277.268146927346,
+      "input_fps": 7277.268146927346,
+      "load_average": [
+        0.6337890625,
+        1.11279296875,
+        1.68505859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 3.0198107059986796,
+      "output_fps": 794.7518019035228,
+      "input_fps": 993.4397523794036,
+      "load_average": [
+        0.66357421875,
+        1.11083984375,
+        1.68115234375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.4011631110042799,
+      "output_fps": 7478.254898586609,
+      "input_fps": 7478.254898586609,
+      "load_average": [
+        0.66357421875,
+        1.11083984375,
+        1.68115234375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.40999809600180015,
+      "output_fps": 7317.107150631324,
+      "input_fps": 7317.107150631324,
+      "load_average": [
+        0.66357421875,
+        1.11083984375,
+        1.68115234375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.6346660010167398,
+      "output_fps": 4726.895713956596,
+      "input_fps": 4726.895713956596,
+      "load_average": [
+        0.66357421875,
+        1.11083984375,
+        1.68115234375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.03944675301318057,
+      "output_fps": 76051.886932179,
+      "input_fps": 76051.886932179,
+      "load_average": [
+        0.66357421875,
+        1.11083984375,
+        1.68115234375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 0.7096737960237078,
+      "output_fps": 3381.8354481272463,
+      "input_fps": 4227.294310159058,
+      "load_average": [
+        0.66357421875,
+        1.11083984375,
+        1.68115234375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 2.894699597003637,
+      "output_fps": 1036.3769708972088,
+      "input_fps": 1036.3769708972088,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 0.3831453129823785,
+      "output_fps": 6263.941952776491,
+      "input_fps": 7829.927440970614,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.03828625098685734,
+      "output_fps": 78357.11052068851,
+      "input_fps": 78357.11052068851,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.40191915599280037,
+      "output_fps": 7464.18764885578,
+      "input_fps": 7464.18764885578,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 0.37796512999921106,
+      "output_fps": 6349.792109142475,
+      "input_fps": 7937.240136428093,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 0.3794702999875881,
+      "output_fps": 6324.605641280755,
+      "input_fps": 7905.757051600944,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.40313752699876204,
+      "output_fps": 7441.629218530213,
+      "input_fps": 7441.629218530213,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.6217870770196896,
+      "output_fps": 4824.802751416787,
+      "input_fps": 4824.802751416787,
+      "load_average": [
+        0.77099609375,
+        1.1259765625,
+        1.68310546875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 2.952917593996972,
+      "output_fps": 1015.9443684099897,
+      "input_fps": 1015.9443684099897,
+      "load_average": [
+        0.86962890625,
+        1.140625,
+        1.68505859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 0.7154466880019754,
+      "output_fps": 3354.5476417012546,
+      "input_fps": 4193.184552126569,
+      "load_average": [
+        0.86962890625,
+        1.140625,
+        1.68505859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.03840922098606825,
+      "output_fps": 78106.24435960721,
+      "input_fps": 78106.24435960721,
+      "load_average": [
+        0.86962890625,
+        1.140625,
+        1.68505859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.40708231000462547,
+      "output_fps": 7369.516990227143,
+      "input_fps": 7369.516990227143,
+      "load_average": [
+        0.86962890625,
+        1.140625,
+        1.68505859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 3.02729348000139,
+      "output_fps": 792.7873580327263,
+      "input_fps": 990.9841975409079,
+      "load_average": [
+        1.04052734375,
+        1.171875,
+        1.6923828125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.40986956999404356,
+      "output_fps": 7319.401633167346,
+      "input_fps": 7319.401633167346,
+      "load_average": [
+        1.04052734375,
+        1.171875,
+        1.6923828125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.40282726200530306,
+      "output_fps": 7447.360898728116,
+      "input_fps": 7447.360898728116,
+      "load_average": [
+        1.04052734375,
+        1.171875,
+        1.6923828125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 0.3783759399957489,
+      "output_fps": 6342.898018375492,
+      "input_fps": 7928.6225229693655,
+      "load_average": [
+        1.04052734375,
+        1.171875,
+        1.6923828125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.03855306899640709,
+      "output_fps": 77814.81677320115,
+      "input_fps": 77814.81677320115,
+      "load_average": [
+        1.04052734375,
+        1.171875,
+        1.6923828125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 3.0197859430045355,
+      "output_fps": 794.7583190655297,
+      "input_fps": 993.4478988319121,
+      "load_average": [
+        1.27783203125,
+        1.21923828125,
+        1.705078125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 0.3776153959915973,
+      "output_fps": 6355.673061734497,
+      "input_fps": 7944.591327168122,
+      "load_average": [
+        1.27783203125,
+        1.21923828125,
+        1.705078125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 0.7517099480028264,
+      "output_fps": 3192.7208178851665,
+      "input_fps": 3990.9010223564583,
+      "load_average": [
+        1.27783203125,
+        1.21923828125,
+        1.705078125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.039638011978240684,
+      "output_fps": 75684.92591522633,
+      "input_fps": 75684.92591522633,
+      "load_average": [
+        1.27783203125,
+        1.21923828125,
+        1.705078125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.4163207249948755,
+      "output_fps": 7205.982839400866,
+      "input_fps": 7205.982839400866,
+      "load_average": [
+        1.27783203125,
+        1.21923828125,
+        1.705078125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.6332908179902006,
+      "output_fps": 4737.16010840129,
+      "input_fps": 4737.16010840129,
+      "load_average": [
+        1.27783203125,
+        1.21923828125,
+        1.705078125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 2.8978622980066575,
+      "output_fps": 1035.245878337145,
+      "input_fps": 1035.245878337145,
+      "load_average": [
+        1.25537109375,
+        1.21533203125,
+        1.701171875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.43008331599412486,
+      "output_fps": 6975.392647040001,
+      "input_fps": 6975.392647040001,
+      "load_average": [
+        1.25537109375,
+        1.21533203125,
+        1.701171875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.39594508399022743,
+      "output_fps": 7576.808303229356,
+      "input_fps": 7576.808303229356,
+      "load_average": [
+        1.25537109375,
+        1.21533203125,
+        1.701171875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 0.3796560729970224,
+      "output_fps": 6321.510890249404,
+      "input_fps": 7901.888612811756,
+      "load_average": [
+        1.25537109375,
+        1.21533203125,
+        1.701171875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.4016216130112298,
+      "output_fps": 7469.717522189516,
+      "input_fps": 7469.717522189516,
+      "load_average": [
+        1.25537109375,
+        1.21533203125,
+        1.701171875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.04904827399877831,
+      "output_fps": 61164.231794878724,
+      "input_fps": 61164.231794878724,
+      "load_average": [
+        1.25537109375,
+        1.21533203125,
+        1.701171875
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 3.0157500590139534,
+      "output_fps": 795.821919268972,
+      "input_fps": 994.777399086215,
+      "load_average": [
+        1.3955078125,
+        1.2451171875,
+        1.70849609375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 2.916886771999998,
+      "output_fps": 1028.4938136090261,
+      "input_fps": 1028.4938136090261,
+      "load_average": [
+        1.3955078125,
+        1.2451171875,
+        1.70849609375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.613959453010466,
+      "output_fps": 4886.316165163533,
+      "input_fps": 4886.316165163533,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.4028497760009486,
+      "output_fps": 7446.944689359678,
+      "input_fps": 7446.944689359678,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.03673363299458288,
+      "output_fps": 81669.02523478719,
+      "input_fps": 81669.02523478719,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 0.38097631398704834,
+      "output_fps": 6299.604232302983,
+      "input_fps": 7874.505290378729,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.4007054420071654,
+      "output_fps": 7486.79624856793,
+      "input_fps": 7486.79624856793,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.3934058250160888,
+      "output_fps": 7625.713218347267,
+      "input_fps": 7625.713218347267,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 0.7083317390060984,
+      "output_fps": 3388.242920425365,
+      "input_fps": 4235.303650531706,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.41183393099345267,
+      "output_fps": 7284.489630961694,
+      "input_fps": 7284.489630961694,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.03908914598287083,
+      "output_fps": 76747.64757753018,
+      "input_fps": 76747.64757753018,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 0.3763284189917613,
+      "output_fps": 6377.408345694301,
+      "input_fps": 7971.760432117876,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.41292000300018117,
+      "output_fps": 7265.329793186802,
+      "input_fps": 7265.329793186802,
+      "load_average": [
+        1.9248046875,
+        1.357421875,
+        1.74267578125
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 0.7316421910072677,
+      "output_fps": 3280.291964431231,
+      "input_fps": 4100.364955539038,
+      "load_average": [
+        2.17138671875,
+        1.41796875,
+        1.76025390625
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.4032993740111124,
+      "output_fps": 7438.642837857068,
+      "input_fps": 7438.642837857068,
+      "load_average": [
+        2.17138671875,
+        1.41796875,
+        1.76025390625
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 3.0788845810166094,
+      "output_fps": 779.5030754961103,
+      "input_fps": 974.3788443701378,
+      "load_average": [
+        2.17138671875,
+        1.41796875,
+        1.76025390625
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.6106380700075533,
+      "output_fps": 4912.893819350129,
+      "input_fps": 4912.893819350129,
+      "load_average": [
+        2.17138671875,
+        1.41796875,
+        1.76025390625
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 0.3915658199985046,
+      "output_fps": 6129.237735840084,
+      "input_fps": 7661.547169800105,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 0.3796791060012765,
+      "output_fps": 6321.127399599205,
+      "input_fps": 7901.409249499006,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.40291384799638763,
+      "output_fps": 7445.760464472536,
+      "input_fps": 7445.760464472536,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 2.9911144970101304,
+      "output_fps": 1002.9706328523203,
+      "input_fps": 1002.9706328523203,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.037668586999643594,
+      "output_fps": 79641.95736963494,
+      "input_fps": 79641.95736963494,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.0402117490011733,
+      "output_fps": 74605.06131957767,
+      "input_fps": 74605.06131957767,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.41483548199175857,
+      "output_fps": 7231.782550509024,
+      "input_fps": 7231.782550509024,
+      "load_average": [
+        2.0771484375,
+        1.41064453125,
+        1.755859375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.6965709799842443,
+      "output_fps": 4306.811633277999,
+      "input_fps": 4306.811633277999,
+      "load_average": [
+        2.07080078125,
+        1.4208984375,
+        1.75732421875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 3.7906409809947945,
+      "output_fps": 633.1383035304382,
+      "input_fps": 791.4228794130477,
+      "load_average": [
+        2.06494140625,
+        1.4306640625,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.42053302202839404,
+      "output_fps": 7133.803632185257,
+      "input_fps": 7133.803632185257,
+      "load_average": [
+        2.06494140625,
+        1.4306640625,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.41555764799704775,
+      "output_fps": 7219.21498607893,
+      "input_fps": 7219.21498607893,
+      "load_average": [
+        2.06494140625,
+        1.4306640625,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.7412437080056407,
+      "output_fps": 4047.251892460139,
+      "input_fps": 4047.251892460139,
+      "load_average": [
+        2.06494140625,
+        1.4306640625,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.03965363299357705,
+      "output_fps": 75655.1108567008,
+      "input_fps": 75655.1108567008,
+      "load_average": [
+        2.06494140625,
+        1.4306640625,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 0.8016441499930806,
+      "output_fps": 2993.8470829241573,
+      "input_fps": 3742.3088536551963,
+      "load_average": [
+        2.06494140625,
+        1.4306640625,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 3.57729938000557,
+      "output_fps": 838.6214519164255,
+      "input_fps": 838.6214519164255,
+      "load_average": [
+        2.30029296875,
+        1.490234375,
+        1.7763671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 0.6456454319995828,
+      "output_fps": 3717.2105323615933,
+      "input_fps": 4646.513165451992,
+      "load_average": [
+        2.30029296875,
+        1.490234375,
+        1.7763671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.03722617001039907,
+      "output_fps": 80588.46771402899,
+      "input_fps": 80588.46771402899,
+      "load_average": [
+        2.30029296875,
+        1.490234375,
+        1.7763671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 1,
+      "output_frames": 3000,
+      "seconds": 0.6806266389903612,
+      "output_fps": 4407.702884580286,
+      "input_fps": 4407.702884580286,
+      "load_average": [
+        2.30029296875,
+        1.490234375,
+        1.7763671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 1,
+      "output_frames": 2400,
+      "seconds": 0.6627484190103132,
+      "output_fps": 3621.283629139299,
+      "input_fps": 4526.604536424124,
+      "load_average": [
+        2.30029296875,
+        1.490234375,
+        1.7763671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 0.6752125799830537,
+      "output_fps": 3554.4361452214566,
+      "input_fps": 4443.045181526821,
+      "load_average": [
+        2.19580078125,
+        1.48193359375,
+        1.77197265625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.697517157997936,
+      "output_fps": 4300.96946806415,
+      "input_fps": 4300.96946806415,
+      "load_average": [
+        2.19580078125,
+        1.48193359375,
+        1.77197265625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.7319871280051302,
+      "output_fps": 4098.432725416688,
+      "input_fps": 4098.432725416688,
+      "load_average": [
+        2.19580078125,
+        1.48193359375,
+        1.77197265625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 3.5792997509997804,
+      "output_fps": 838.1527697315743,
+      "input_fps": 838.1527697315743,
+      "load_average": [
+        2.099609375,
+        1.4736328125,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 0.7781743959931191,
+      "output_fps": 3084.141565641054,
+      "input_fps": 3855.1769570513175,
+      "load_average": [
+        2.099609375,
+        1.4736328125,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.03869683897937648,
+      "output_fps": 77525.71215439207,
+      "input_fps": 77525.71215439207,
+      "load_average": [
+        2.099609375,
+        1.4736328125,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.4147872570028994,
+      "output_fps": 7232.623349321047,
+      "input_fps": 7232.623349321047,
+      "load_average": [
+        2.099609375,
+        1.4736328125,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 3.7012262780044693,
+      "output_fps": 648.4337405315217,
+      "input_fps": 810.5421756644022,
+      "load_average": [
+        2.01123046875,
+        1.46533203125,
+        1.76318359375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.6966156990092713,
+      "output_fps": 4306.53515886393,
+      "input_fps": 4306.53515886393,
+      "load_average": [
+        2.01123046875,
+        1.46533203125,
+        1.76318359375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.4014211549947504,
+      "output_fps": 7473.447681249467,
+      "input_fps": 7473.447681249467,
+      "load_average": [
+        2.01123046875,
+        1.46533203125,
+        1.76318359375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 2400,
+      "seconds": 0.6537129690113943,
+      "output_fps": 3671.336066086472,
+      "input_fps": 4589.17008260809,
+      "load_average": [
+        2.01123046875,
+        1.46533203125,
+        1.76318359375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 2,
+      "output_frames": 3000,
+      "seconds": 0.03860753000481054,
+      "output_fps": 77705.048720449,
+      "input_fps": 77705.048720449,
+      "load_average": [
+        2.01123046875,
+        1.46533203125,
+        1.76318359375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 3.692364473012276,
+      "output_fps": 649.9900043838443,
+      "input_fps": 812.4875054798053,
+      "load_average": [
+        1.93017578125,
+        1.45751953125,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 0.6582804280042183,
+      "output_fps": 3645.862610979254,
+      "input_fps": 4557.328263724067,
+      "load_average": [
+        1.93017578125,
+        1.45751953125,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 0.7653621330100577,
+      "output_fps": 3135.7705019467708,
+      "input_fps": 3919.713127433464,
+      "load_average": [
+        1.93017578125,
+        1.45751953125,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.03727064002305269,
+      "output_fps": 80492.31239775961,
+      "input_fps": 80492.31239775961,
+      "load_average": [
+        1.93017578125,
+        1.45751953125,
+        1.7587890625
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.6954314399918076,
+      "output_fps": 4313.868812194256,
+      "input_fps": 4313.868812194256,
+      "load_average": [
+        2.09619140625,
+        1.5,
+        1.77099609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.7330668169888668,
+      "output_fps": 4092.3963961740224,
+      "input_fps": 4092.3963961740224,
+      "load_average": [
+        2.09619140625,
+        1.5,
+        1.77099609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 3.5755292620160617,
+      "output_fps": 839.036623716079,
+      "input_fps": 839.036623716079,
+      "load_average": [
+        2.08837890625,
+        1.50830078125,
+        1.7724609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.40705531698768027,
+      "output_fps": 7370.005684241674,
+      "input_fps": 7370.005684241674,
+      "load_average": [
+        2.08837890625,
+        1.50830078125,
+        1.7724609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.6855147530150134,
+      "output_fps": 4376.273430740151,
+      "input_fps": 4376.273430740151,
+      "load_average": [
+        2.08837890625,
+        1.50830078125,
+        1.7724609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 2400,
+      "seconds": 0.6619433450105134,
+      "output_fps": 3625.6879355164174,
+      "input_fps": 4532.1099193955215,
+      "load_average": [
+        2.08837890625,
+        1.50830078125,
+        1.7724609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.4291419069922995,
+      "output_fps": 6990.694572398943,
+      "input_fps": 6990.694572398943,
+      "load_average": [
+        2.08837890625,
+        1.50830078125,
+        1.7724609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 3,
+      "output_frames": 3000,
+      "seconds": 0.05603417500969954,
+      "output_fps": 53538.75558051312,
+      "input_fps": 53538.75558051312,
+      "load_average": [
+        2.08837890625,
+        1.50830078125,
+        1.7724609375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 3.6599854420055635,
+      "output_fps": 655.7403131868391,
+      "input_fps": 819.6753914835489,
+      "load_average": [
+        2.16162109375,
+        1.533203125,
+        1.779296875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 3.557061272993451,
+      "output_fps": 843.3928374462172,
+      "input_fps": 843.3928374462172,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.695454084983794,
+      "output_fps": 4313.728346379486,
+      "input_fps": 4313.728346379486,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.4197647160035558,
+      "output_fps": 7146.860814224765,
+      "input_fps": 7146.860814224765,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.03867520100902766,
+      "output_fps": 77569.08617746376,
+      "input_fps": 77569.08617746376,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 0.6657966199854854,
+      "output_fps": 3604.704391638877,
+      "input_fps": 4505.880489548596,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.4037620219751261,
+      "output_fps": 7430.119319604596,
+      "input_fps": 7430.119319604596,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.6787062670045998,
+      "output_fps": 4420.174301970411,
+      "input_fps": 4420.174301970411,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 0.7744082050048746,
+      "output_fps": 3099.140717375138,
+      "input_fps": 3873.9258967189226,
+      "load_average": [
+        2.068359375,
+        1.52392578125,
+        1.77490234375
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.6896668480185326,
+      "output_fps": 4349.926357369848,
+      "input_fps": 4349.926357369848,
+      "load_average": [
+        1.90234375,
+        1.49853515625,
+        1.76513671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 4,
+      "output_frames": 3000,
+      "seconds": 0.03751369900419377,
+      "output_fps": 79970.7861297448,
+      "input_fps": 79970.7861297448,
+      "load_average": [
+        1.90234375,
+        1.49853515625,
+        1.76513671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 4,
+      "output_frames": 2400,
+      "seconds": 0.6565109779767226,
+      "output_fps": 3655.689060061833,
+      "input_fps": 4569.611325077291,
+      "load_average": [
+        1.90234375,
+        1.49853515625,
+        1.76513671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.6902961829910055,
+      "output_fps": 4345.96058028484,
+      "input_fps": 4345.96058028484,
+      "load_average": [
+        1.90234375,
+        1.49853515625,
+        1.76513671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 0.7862482909986284,
+      "output_fps": 3052.470863817988,
+      "input_fps": 3815.588579772485,
+      "load_average": [
+        1.90234375,
+        1.49853515625,
+        1.76513671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.4205823120137211,
+      "output_fps": 7132.967588760908,
+      "input_fps": 7132.967588760908,
+      "load_average": [
+        1.90234375,
+        1.49853515625,
+        1.76513671875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm_vdecimate",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 3.679672666999977,
+      "output_fps": 652.2319285418153,
+      "input_fps": 815.2899106772692,
+      "load_average": [
+        1.830078125,
+        1.490234375,
+        1.7607421875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.7096900859905872,
+      "output_fps": 4227.197278390317,
+      "input_fps": 4227.197278390317,
+      "load_average": [
+        1.830078125,
+        1.490234375,
+        1.7607421875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 0.6656462340033613,
+      "output_fps": 3605.5187837025765,
+      "input_fps": 4506.898479628221,
+      "load_average": [
+        1.830078125,
+        1.490234375,
+        1.7607421875
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps24",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 2400,
+      "seconds": 0.6980647500022314,
+      "output_fps": 3438.0764821491534,
+      "input_fps": 4297.595602686441,
+      "load_average": [
+        1.923828125,
+        1.515625,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30_di0",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.4038252849713899,
+      "output_fps": 7428.955322132796,
+      "input_fps": 7428.955322132796,
+      "load_average": [
+        1.923828125,
+        1.515625,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "vfm",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 3.56275553299929,
+      "output_fps": 842.0448644912954,
+      "input_fps": 842.0448644912954,
+      "load_average": [
+        1.923828125,
+        1.515625,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.038854899001307786,
+      "output_fps": 77210.34096367167,
+      "input_fps": 77210.34096367167,
+      "load_average": [
+        1.923828125,
+        1.515625,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "source_only",
+      "threads": 8,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.03960798398475163,
+      "output_fps": 75742.30491395238,
+      "input_fps": 75742.30491395238,
+      "load_average": [
+        1.923828125,
+        1.515625,
+        1.767578125
+      ]
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "pipeline": "zit_fps30",
+      "threads": 1,
+      "repeat": 5,
+      "output_frames": 3000,
+      "seconds": 0.6792879379936494,
+      "output_fps": 4416.389328008422,
+      "input_fps": 4416.389328008422,
+      "load_average": [
+        2.01025390625,
+        1.54052734375,
+        1.7744140625
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "source_only",
+      "median_output_fps": 78357.11052068851,
+      "min_output_fps": 75684.92591522633,
+      "max_output_fps": 81669.02523478719
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "zit_fps30",
+      "median_output_fps": 7464.18764885578,
+      "min_output_fps": 7231.782550509024,
+      "max_output_fps": 7625.713218347267
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "zit_fps30_di0",
+      "median_output_fps": 7447.360898728116,
+      "min_output_fps": 6975.392647040001,
+      "max_output_fps": 7486.79624856793
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "vfm",
+      "median_output_fps": 1028.4938136090261,
+      "min_output_fps": 1002.9706328523203,
+      "max_output_fps": 1036.3769708972088
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "zit_fps24",
+      "median_output_fps": 6342.898018375492,
+      "min_output_fps": 6263.941952776491,
+      "max_output_fps": 6377.408345694301
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "vfm_vdecimate",
+      "median_output_fps": 794.7518019035228,
+      "min_output_fps": 779.5030754961103,
+      "max_output_fps": 795.821919268972
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "source_only",
+      "median_output_fps": 76051.886932179,
+      "min_output_fps": 61164.231794878724,
+      "max_output_fps": 78106.24435960721
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "zit_fps30",
+      "median_output_fps": 7277.268146927346,
+      "min_output_fps": 7205.982839400866,
+      "max_output_fps": 7319.401633167346
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "zit_fps30_di0",
+      "median_output_fps": 7438.642837857068,
+      "min_output_fps": 7317.107150631324,
+      "max_output_fps": 7469.717522189516
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "vfm",
+      "median_output_fps": 4824.802751416787,
+      "min_output_fps": 4726.895713956596,
+      "max_output_fps": 4912.893819350129
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "zit_fps24",
+      "median_output_fps": 6321.510890249404,
+      "min_output_fps": 6129.237735840084,
+      "max_output_fps": 6349.792109142475
+    },
+    {
+      "source": "eyeVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "vfm_vdecimate",
+      "median_output_fps": 3354.5476417012546,
+      "min_output_fps": 3192.7208178851665,
+      "max_output_fps": 3388.242920425365
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "source_only",
+      "median_output_fps": 77705.048720449,
+      "min_output_fps": 77210.34096367167,
+      "max_output_fps": 80588.46771402899
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "zit_fps30",
+      "median_output_fps": 4407.702884580286,
+      "min_output_fps": 4300.96946806415,
+      "max_output_fps": 4420.174301970411
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "zit_fps30_di0",
+      "median_output_fps": 7428.955322132796,
+      "min_output_fps": 7133.803632185257,
+      "max_output_fps": 7473.447681249467
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "vfm",
+      "median_output_fps": 839.036623716079,
+      "min_output_fps": 838.1527697315743,
+      "max_output_fps": 843.3928374462172
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "zit_fps24",
+      "median_output_fps": 3655.689060061833,
+      "min_output_fps": 3438.0764821491534,
+      "max_output_fps": 3717.2105323615933
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 1,
+      "pipeline": "vfm_vdecimate",
+      "median_output_fps": 649.9900043838443,
+      "min_output_fps": 633.1383035304382,
+      "max_output_fps": 655.7403131868391
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "source_only",
+      "median_output_fps": 75742.30491395238,
+      "min_output_fps": 53538.75558051312,
+      "max_output_fps": 79970.7861297448
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "zit_fps30",
+      "median_output_fps": 4313.868812194256,
+      "min_output_fps": 4306.53515886393,
+      "max_output_fps": 4349.926357369848
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "zit_fps30_di0",
+      "median_output_fps": 7146.860814224765,
+      "min_output_fps": 6990.694572398943,
+      "max_output_fps": 7232.623349321047
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "vfm",
+      "median_output_fps": 4098.432725416688,
+      "min_output_fps": 4047.251892460139,
+      "max_output_fps": 4313.728346379486
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "zit_fps24",
+      "median_output_fps": 3605.5187837025765,
+      "min_output_fps": 3554.4361452214566,
+      "max_output_fps": 3625.6879355164174
+    },
+    {
+      "source": "gbVTS_01_1.VOB",
+      "threads": 8,
+      "pipeline": "vfm_vdecimate",
+      "median_output_fps": 3084.141565641054,
+      "min_output_fps": 2993.8470829241573,
+      "max_output_fps": 3135.7705019467708
+    }
+  ],
+  "vivtc_distribution": {
+    "name": "vapoursynth-vivtc",
+    "version": "2.0",
+    "plugin_reported_version": "1.0"
+  },
+  "sources": [
+    {
+      "name": "eyeVTS_01_1.VOB",
+      "width": 720,
+      "height": 480,
+      "format": "YUV420P8",
+      "fps_num": 30000,
+      "fps_den": 1001,
+      "total_source_frames": 28807,
+      "cached_frames": 3250,
+      "initial_source_evaluations": 3250
+    },
+    {
+      "name": "gbVTS_01_1.VOB",
+      "width": 720,
+      "height": 480,
+      "format": "YUV420P8",
+      "fps_num": 30000,
+      "fps_den": 1001,
+      "total_source_frames": 32790,
+      "cached_frames": 3250,
+      "initial_source_evaluations": 3250
+    }
+  ],
+  "source_cache_misses_during_measurements": 0,
+  "processing_device": "CPU (both plugins)"
+}

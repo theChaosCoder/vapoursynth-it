@@ -4,7 +4,10 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/), versioning is
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [1.5.0] — 2026-10-04
+
+Deterministic seeking and asynchronous prefetch, corrected release
+compatibility, and the move to Zig 0.17. VapourSynth R55 remains supported.
 
 ### Build dependencies
 
@@ -27,6 +30,15 @@ follows [Keep a Changelog](https://keepachangelog.com/), versioning is
   tags, and validate the binaries during packaging and CI.
 - Explicitly select VapourSynth API 4.0, retaining the advertised R55 minimum
   instead of inheriting the bindings' API 4.1 default.
+
+### Tests and benchmarks
+
+- Expand real-content determinism checks across fresh filter instances,
+  sequential and reversed requests, seeking, and asynchronous prefetch;
+  include 12-bit formats and additional rendering modes.
+- Add a reproducible cached-source comparison with VFM and VFM + VDecimate,
+  including raw measurements on VapourSynth R76 and R81RC1. The comparison
+  measures CPU throughput; the algorithms do not produce identical pixels.
 
 ## [1.4.0] — 2026-06-10
 

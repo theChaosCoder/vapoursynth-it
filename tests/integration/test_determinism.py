@@ -126,6 +126,25 @@ def test_ambiguous_blocks_inherit_cadence_in_every_request_order(core, length, b
         core.num_threads = threads
 
 
+def test_long_seek_under_prefetch_matches_sequential(core):
+    # 16 requests 100 blocks past the analysis cursor arrive at once; every
+    # pending request chases the cursor in batches. The tail, and everything
+    # decided while catching up, must match the sequential reference.
+    source = core.std.Loop(gen_testclip.FIXTURES["two_frame_telecine"](), times=50)
+    reference = core.zit.IT(source)
+    expected = _clip_hash(reference, range(reference.num_frames))
+    threads = core.num_threads
+    try:
+        core.num_threads = 8
+        node = core.zit.IT(source)
+        tail = range(node.num_frames - 16, node.num_frames)
+        for future in [node.get_frame_async(n) for n in tail]:
+            future.result(timeout=60).close()
+        assert _clip_hash(node, ORDERS["reversed"](node.num_frames)) == expected
+    finally:
+        core.num_threads = threads
+
+
 def test_source_error_during_seek_does_not_poison_analysis(core):
     source = core.std.BlankClip(width=128, height=96, length=30,
                                format=vs.YUV420P8)

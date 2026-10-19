@@ -248,9 +248,12 @@ everything plus fixes a few latent bugs:
    sharing mutable per-instance state across calls.
 4. **Frame request range**: widened to cover what the algorithm actually
    reads (`[base-2, base+6]` for fps=24, `[n-2, n+2]` for fps=30 — plus
-   `[base-3, base+7]` when `blend=true`). Upstream relied on the
-   API 3 sync `getFrame` to retrieve neighbours, which is no longer
-   permitted from inside `getFrameFilter` under API 4.
+   `[base-3, base+7]` when `blend=true`). For fps=24, up to four
+   undecided predecessor blocks are fetched with the same request;
+   a longer lag (a seek) is analyzed first in batches of four blocks,
+   `[first-1, first+20]`, each released before the next is requested.
+   Upstream relied on the API 3 sync `getFrame` to retrieve neighbours,
+   which is no longer permitted from inside `getFrameFilter` under API 4.
 5. **Edge clamping** of frame indices passed to `getFrameFilter`. The
    upstream algorithm fetches `n-1` even at `n=0`; under API 3 the core
    silently clamped, under API 4 it returns null and dereferences crash.

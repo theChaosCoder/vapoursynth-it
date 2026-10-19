@@ -6,8 +6,9 @@
 //!
 //! Threading mode: `fmUnordered`. Request planning reads the shared analysis
 //! cursor, so all callbacks must be serialized. Decimation blocks are always
-//! decided in source order, independently of the output request order. A seek
-//! analyzes missing predecessors in bounded batches and caches their decisions.
+//! decided in source order, independently of the output request order. A few
+//! undecided predecessors are fetched together with the render frames; a seek
+//! analyzes the rest in bounded batches and caches their decisions.
 
 const std = @import("std");
 const vapoursynth = @import("vapoursynth");
@@ -381,10 +382,20 @@ fn free(
     inst.destroy();
 }
 
-const FrameRequest = struct {
-    /// null means the requested sources are for rendering the output frame.
-    analysis_base: ?i32 = null,
-};
+// Per-request tag, carried in VS's opaque `frame_data` slot so the per-frame
+// hot path allocates nothing:
+//   null              the requested frames render output frame `n`
+//   analysis_base + 1 the requested frames (also) decide blocks from
+//                     `analysis_base` on; see requestNextBatch.
+
+inline fn tagAnalysis(first: i32) *anyopaque {
+    return @ptrFromInt(@as(usize, @intCast(first)) + 1);
+}
+
+inline fn analysisBaseOf(tag: ?*anyopaque) ?i32 {
+    const p = tag orelse return null;
+    return @intCast(@intFromPtr(p) - 1);
+}
 
 fn getFrame(
     n: c_int,
@@ -403,20 +414,7 @@ fn getFrame(
     const zapi = ZAPI.init(vsapi, core, frame_ctx);
 
     if (activation_reason == .Initial) {
-        const request = inst.allocator.create(FrameRequest) catch {
-            zapi.setFilterError("IT: out of memory");
-            return null;
-        };
-        frame_data.* = request;
-        requestNextBatch(inst, &zapi, n, request);
-        return null;
-    }
-    if (activation_reason == .Error) {
-        if (frame_data.*) |data| {
-            const request: *FrameRequest = @ptrCast(@alignCast(data));
-            inst.allocator.destroy(request);
-            frame_data.* = null;
-        }
+        requestNextBatch(inst, &zapi, n, frame_data);
         return null;
     }
     if (activation_reason != .AllFramesReady) return null;
@@ -458,32 +456,41 @@ inline fn block24(out_n: i32) Block24 {
     return .{ .tf = tf, .base = @divTrunc(tf, 5) * 5 };
 }
 
+/// Blocks decided per analysis batch while a seek catches up. A lag of at
+/// most this many blocks is not chased: its frames are fetched together with
+/// the render frames, so the output costs one scheduler round trip.
+const chase_blocks: i32 = 4;
+const chase_span: i32 = 5 * chase_blocks;
+
 const FrameRange = struct { lo: i32, hi: i32 };
 
-/// Input frames one analysis batch touches: block `first` plus ChooseBest's
-/// one-frame halo, clipped to the clip. The request loop and the early
-/// release loop must cover exactly this range.
+/// Input frames one chase batch touches: blocks `first` .. `first +
+/// chase_span - 5` plus ChooseBest's one-frame halo, clipped to the clip.
+/// The request loop and the early release loop must cover exactly this range.
 inline fn analysisRange(first: i32, max_frames: i32) FrameRange {
     return .{
         .lo = @max(0, first - 1),
-        .hi = @intCast(@min(@as(i64, first) + 5, max_frames - 1)),
+        .hi = @intCast(@min(@as(i64, first) + chase_span, max_frames - 1)),
     };
 }
 
 fn getFrameRequest(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32, frame_data: *?*anyopaque) ?*const vs.Frame {
-    const request: *FrameRequest = @ptrCast(@alignCast(frame_data.*.?));
-    if (request.analysis_base) |base| {
-        // Another pending output request may already have decided this block.
-        analyzeBlock(T, bits, cs, inst, zapi, base);
-        const range = analysisRange(base, inst.max_frames);
-        var i = range.lo;
-        while (i <= range.hi) : (i += 1) zapi.releaseFrameEarly(inst.node, i);
-        requestNextBatch(inst, zapi, n, request);
-        return null;
-    }
-    defer {
-        inst.allocator.destroy(request);
-        frame_data.* = null;
+    if (analysisBaseOf(frame_data.*)) |first| {
+        // Same split as requestNextBatch: both derive it from (n, first).
+        // Another pending output request may already have decided some of
+        // these blocks; analyzeBlock then returns without work.
+        const base = block24(n).base;
+        if (base - first > chase_span) {
+            var b = first;
+            while (b < first + chase_span) : (b += 5) analyzeBlock(T, bits, cs, inst, zapi, b);
+            const range = analysisRange(first, inst.max_frames);
+            var i = range.lo;
+            while (i <= range.hi) : (i += 1) zapi.releaseFrameEarly(inst.node, i);
+            requestNextBatch(inst, zapi, n, frame_data);
+            return null;
+        }
+        var b = first;
+        while (b < base) : (b += 5) analyzeBlock(T, bits, cs, inst, zapi, b);
     }
     return getFrameImpl(T, bits, cs, inst, zapi, n);
 }
@@ -536,23 +543,34 @@ fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSa
 // Frame-request planning
 // ---------------------------------------------------------------------------
 
-fn requestNextBatch(inst: *Filter, zapi: *const ZAPI, out_n: i32, request: *FrameRequest) void {
+fn requestNextBatch(inst: *Filter, zapi: *const ZAPI, out_n: i32, frame_data: *?*anyopaque) void {
     const base = block24(out_n).base;
     if (inst.fps == 24 and inst.next_analysis_base < base) {
         const first: i32 = @intCast(inst.next_analysis_base);
-        request.analysis_base = first;
-        // Analysis alone needs only ChooseBest's one-frame halo. Release
-        // each batch before requesting the next so a seek cannot pin the clip.
-        const range = analysisRange(first, inst.max_frames);
-        var i = range.lo;
-        while (i <= range.hi) : (i += 1) zapi.requestFrameFilter(i, inst.node);
+        frame_data.* = tagAnalysis(first);
+        if (base - first > chase_span) {
+            // Seek: analysis alone needs only ChooseBest's one-frame halo.
+            // Release each batch before requesting the next so a seek cannot
+            // pin the clip.
+            const range = analysisRange(first, inst.max_frames);
+            var i = range.lo;
+            while (i <= range.hi) : (i += 1) zapi.requestFrameFilter(i, inst.node);
+        } else {
+            // Short lag — the normal case under prefetch, where the next
+            // block's requests arrive before this block is rendered. Fetch
+            // the undecided predecessors with the render frames instead of
+            // spending a round trip per block.
+            requestNeededFrames(inst, zapi, out_n, first - 1);
+        }
     } else {
-        request.analysis_base = null;
-        requestNeededFrames(inst, zapi, out_n);
+        frame_data.* = null;
+        requestNeededFrames(inst, zapi, out_n, null);
     }
 }
 
-fn requestNeededFrames(inst: *Filter, zapi: *const ZAPI, out_n: i32) void {
+/// `extend_lo`, fps=24 only: also request down to this input frame so the
+/// callback can decide the blocks preceding the output frame's own block.
+fn requestNeededFrames(inst: *Filter, zapi: *const ZAPI, out_n: i32, extend_lo: ?i32) void {
     // Frame-reach analysis (worst case):
     //  - ChooseBest(n) reads [n-1, n+1] (srcC, srcP, ensureMotionMap of n+1).
     //  - GetFrameSub(n) -> ChooseBest(n)               : reach [n-1, n+1]
@@ -571,8 +589,9 @@ fn requestNeededFrames(inst: *Filter, zapi: *const ZAPI, out_n: i32) void {
         // [base-1, base+5] (blend kernel size 3 with start in [-1, 3]),
         // and each of those drawPrevFrame paths reaches another ±2 — so
         // we widen to [base-3, base+7] for that case.
-        const lo: i32 = if (inst.blend) base - 3 else base - 2;
+        const render_lo: i32 = if (inst.blend) base - 3 else base - 2;
         const hi: i32 = if (inst.blend) base + 7 else base + 6;
+        const lo = if (extend_lo) |e| @min(e, render_lo) else render_lo;
         var i: i32 = lo;
         while (i <= hi) : (i += 1) {
             const clipped = plane.clipFrame(i, inst.max_frames);

@@ -67,9 +67,28 @@ def command_output(*args):
     return subprocess.check_output(args, cwd=ROOT, text=True).strip()
 
 
+def display_path(path):
+    """Portable provenance: strip the repository or home prefix from paths."""
+    for base, prefix in ((ROOT, ""), (Path.home(), "~/")):
+        if path.is_relative_to(base):
+            return prefix + str(path.relative_to(base))
+    return str(path)
+
+
 def artifact(path):
     path = Path(path).resolve()
-    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    return {"path": display_path(path),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def cpu_name(cpuinfo=Path("/proc/cpuinfo")):
+    """'model name' from /proc/cpuinfo; aarch64 and non-Linux hosts lack it."""
+    fallback = platform.processor()
+    if not cpuinfo.exists():
+        return fallback
+    return next((line.split(":", 1)[1].strip()
+                 for line in cpuinfo.read_text().splitlines()
+                 if line.startswith("model name")), fallback)
 
 
 def main():
@@ -90,7 +109,13 @@ def main():
 
     core = vs.core
     core.max_cache_size = 4096
-    core.std.LoadPlugin(str(args.zit_plugin.resolve()))
+    # VapourSynth refuses to load the same plugin twice (e.g. an installed
+    # vapoursynth-zit wheel is autoloaded); check first and hash what runs.
+    if not hasattr(core, "zit"):
+        core.std.LoadPlugin(str(args.zit_plugin.resolve()))
+    zit_path = Path(core.zit.plugin_path).resolve()
+    if zit_path != args.zit_plugin.resolve():
+        parser.error(f"a different zit binary is already loaded: {zit_path}")
     if args.vivtc_plugin and not hasattr(core, "vivtc"):
         core.std.LoadPlugin(str(args.vivtc_plugin.resolve()))
     if not hasattr(core, "vivtc"):
@@ -104,19 +129,14 @@ def main():
             distributions[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
             distributions[name] = None
-    cpu = platform.processor()
-    if Path("/proc/cpuinfo").exists():
-        cpu = next(line.split(":", 1)[1].strip()
-                   for line in Path("/proc/cpuinfo").read_text().splitlines()
-                   if line.startswith("model name"))
     report = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "cpu": cpu, "platform": platform.platform(),
+        "cpu": cpu_name(), "platform": platform.platform(),
         "python": platform.python_version(), "vapoursynth": str(core),
         "distributions": distributions,
         "processing_device": "CPU (both plugins)",
         "zig": command_output("zig", "version"), "git_commit": command_output("git", "rev-parse", "HEAD"),
-        "zit_binary": artifact(args.zit_plugin),
+        "zit_binary": artifact(zit_path),
         "vivtc_binary": artifact(vivtc_path),
         "plugin_versions": {p.namespace: f"{p.version.major}.{p.version.minor}"
                             for p in core.plugins() if p.namespace in ("zit", "vivtc", "bs")},

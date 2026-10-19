@@ -7,11 +7,11 @@
   "zig": "0.17.0",
   "git_commit": "84832dedbaefbe586dbecd1bda84da0e45126330",
   "zit_binary": {
-    "path": "/home/anatolij/dev/zit/zig-out/lib/libzit.so",
+    "path": "zig-out/lib/libzit.so",
     "sha256": "db977c91f946da7f201d08881c4f1081194f4f86cf691a8f41b78f79948d23bb"
   },
   "vivtc_binary": {
-    "path": "/home/anatolij/dev/zit/encode_test/.venv/lib/python3.14/site-packages/vapoursynth/plugins/vivtc.so",
+    "path": "encode_test/.venv/lib/python3.14/site-packages/vapoursynth/plugins/vivtc.so",
     "sha256": "2fd33e8290423d5e4285169d9788f6d4e161ba1a9fc5dc6038c71d811d909921"
   },
   "plugin_versions": {

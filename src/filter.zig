@@ -440,14 +440,44 @@ fn getFrame(
     };
 }
 
+// ---------------------------------------------------------------------------
+// fps=24 block geometry — shared by request planning, analysis ordering,
+// and rendering. Deterministic seeking relies on every site agreeing.
+// ---------------------------------------------------------------------------
+
+const Block24 = struct {
+    /// Telecined input frame that output frame `out_n` maps to.
+    tf: i32,
+    /// First input frame of the 5-frame block containing `tf`.
+    base: i32,
+};
+
+/// Output frame `out_n` -> its telecined input frame and 5-frame block base.
+inline fn block24(out_n: i32) Block24 {
+    const tf = out_n + @divTrunc(out_n, 4);
+    return .{ .tf = tf, .base = @divTrunc(tf, 5) * 5 };
+}
+
+const FrameRange = struct { lo: i32, hi: i32 };
+
+/// Input frames one analysis batch touches: block `first` plus ChooseBest's
+/// one-frame halo, clipped to the clip. The request loop and the early
+/// release loop must cover exactly this range.
+inline fn analysisRange(first: i32, max_frames: i32) FrameRange {
+    return .{
+        .lo = @max(0, first - 1),
+        .hi = @intCast(@min(@as(i64, first) + 5, max_frames - 1)),
+    };
+}
+
 fn getFrameRequest(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, n: i32, frame_data: *?*anyopaque) ?*const vs.Frame {
     const request: *FrameRequest = @ptrCast(@alignCast(frame_data.*.?));
     if (request.analysis_base) |base| {
         // Another pending output request may already have decided this block.
         analyzeBlock(T, bits, cs, inst, zapi, base);
-        var i = @max(0, base - 1);
-        const last = @min(@as(i64, base) + 5, inst.max_frames - 1);
-        while (i <= last) : (i += 1) zapi.releaseFrameEarly(inst.node, i);
+        const range = analysisRange(base, inst.max_frames);
+        var i = range.lo;
+        while (i <= range.hi) : (i += 1) zapi.releaseFrameEarly(inst.node, i);
         requestNextBatch(inst, zapi, n, request);
         return null;
     }
@@ -466,8 +496,9 @@ fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSa
     var base24: i32 = 0;
     var tf24: i32 = 0;
     if (inst.fps == 24) {
-        tf24 = n + @divTrunc(n, 4);
-        base24 = @divTrunc(tf24, 5) * 5;
+        const block = block24(n);
+        tf24 = block.tf;
+        base24 = block.base;
         input_n = resolveInputFrame24(T, bits, cs, inst, zapi, n);
     } else {
         getFrameSub(T, bits, cs, inst, zapi, n);
@@ -506,15 +537,15 @@ fn getFrameImpl(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSa
 // ---------------------------------------------------------------------------
 
 fn requestNextBatch(inst: *Filter, zapi: *const ZAPI, out_n: i32, request: *FrameRequest) void {
-    const base = @divTrunc(@as(i64, out_n), 4) * 5;
+    const base = block24(out_n).base;
     if (inst.fps == 24 and inst.next_analysis_base < base) {
         const first: i32 = @intCast(inst.next_analysis_base);
         request.analysis_base = first;
         // Analysis alone needs only ChooseBest's one-frame halo. Release
         // each batch before requesting the next so a seek cannot pin the clip.
-        var i = @max(0, first - 1);
-        const last = @min(@as(i64, first) + 5, inst.max_frames - 1);
-        while (i <= last) : (i += 1) zapi.requestFrameFilter(i, inst.node);
+        const range = analysisRange(first, inst.max_frames);
+        var i = range.lo;
+        while (i <= range.hi) : (i += 1) zapi.requestFrameFilter(i, inst.node);
     } else {
         request.analysis_base = null;
         requestNeededFrames(inst, zapi, out_n);
@@ -532,8 +563,7 @@ fn requestNeededFrames(inst: *Filter, zapi: *const ZAPI, out_n: i32) void {
     //  -> union per output frame: [n-2, n+2].
     //  - For fps=24, the same applies for every frame in the 5-frame block.
     if (inst.fps == 24) {
-        const tf = out_n + @divTrunc(out_n, 4);
-        const base = @divTrunc(tf, 5) * 5;
+        const base = block24(out_n).base;
         // Range to cover: GetFrameSub(base..base+4) -> [base-1, base+5],
         // plus DrawPrevFrame on the chosen input frame within [base, base+4]
         // -> can extend to [base-2, base+6]. When blend=true the algorithm
@@ -714,11 +744,11 @@ fn analyzeBlock(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSa
 }
 
 inline fn resolveInputFrame24(comptime T: type, comptime bits: u8, comptime cs: plane.ChromaSampling, inst: *Filter, zapi: *const ZAPI, out_n: i32) i32 {
-    const tf = out_n + @divTrunc(out_n, 4);
-    const base = @divTrunc(tf, 5) * 5;
+    const block = block24(out_n);
+    const base = block.base;
     analyzeBlock(T, bits, cs, inst, zapi, base);
 
-    var no: i32 = tf - base;
+    var no: i32 = block.tf - base;
     var i: i32 = 0;
     while (i < 5) : (i += 1) {
         const idx: usize = @intCast(plane.clipFrame(base + i, inst.max_frames));

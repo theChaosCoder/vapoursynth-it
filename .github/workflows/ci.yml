@@ -22,7 +22,7 @@ jobs:
     name: fmt + test + cross
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -46,33 +46,30 @@ jobs:
         # a naive matrix upload).
         run: zig build cross
 
-      - name: List built artefacts
-        run: find zig-out -type f \( -name '*.so' -o -name '*.dylib' -o -name '*.dll' \) | sort
-
       - name: Check binary deployment and VapourSynth API compatibility
         run: python3 -m unittest discover -s tests/packaging -v
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: libzit-linux-x86_64
           path: zig-out/linux-x86_64/libzit.so
           if-no-files-found: error
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: libzit-linux-aarch64
           path: zig-out/linux-aarch64/libzit.so
           if-no-files-found: error
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: libzit-macos-x86_64
           path: zig-out/macos-x86_64/libzit.dylib
           if-no-files-found: error
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: libzit-macos-aarch64
           path: zig-out/macos-aarch64/libzit.dylib
           if-no-files-found: error
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: libzit-windows-x86_64
           path: zig-out/windows-x86_64/zit.dll
@@ -85,32 +82,24 @@ jobs:
   integration:
     name: Integration tests
     runs-on: ubuntu-latest
-    needs: [build]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install VapourSynth + test deps
-        run: pip install VapourSynth pytest numpy
+        run: pip install VapourSynth pytest
 
       - name: Build the Zig plugin
         run: zig build --release=fast
 
-      - name: Build the upstream API-4 reference plugin (best effort)
-        continue-on-error: true
-        run: scripts/build_upstream_api4.sh
-
       - name: Run pytest
         env:
-          PYTHONPATH: scripts
           # Fail (not skip) if the plugin is missing — a silent session-skip
           # would turn a build/layout breakage into a green run.
           ZIT_REQUIRE_PLUGIN: "1"
-        run: |
-          python -c "import vapoursynth as vs; print(vs.core)"
-          pytest tests/integration -v
+        run: pytest tests/integration -v

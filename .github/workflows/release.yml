@@ -37,7 +37,7 @@ jobs:
         run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout at tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.tag.outputs.tag }}
 
@@ -46,7 +46,7 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -57,14 +57,13 @@ jobs:
         run: zig build test --release=fast --summary all
 
       - name: Install VapourSynth + test deps
-        run: pip install VapourSynth pytest numpy
+        run: pip install VapourSynth pytest
 
       - name: Build the plugin exactly as shipped
         run: zig build --release=fast
 
       - name: Integration tests against the ReleaseFast artifact
         env:
-          PYTHONPATH: scripts
           ZIT_REQUIRE_PLUGIN: "1"
         run: pytest tests/integration -v
 
@@ -85,7 +84,7 @@ jobs:
         run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout at tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.tag.outputs.tag }}
 
@@ -94,7 +93,7 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -144,7 +143,7 @@ jobs:
         run: python scripts/build_pypi_wheels.py
 
       - name: Upload PyPI wheels as workflow artifact (for publish-pypi job)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: pypi-wheels
           path: dist/*.whl
@@ -156,7 +155,7 @@ jobs:
           cat RELEASE_NOTES.md
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
@@ -181,7 +180,7 @@ jobs:
 
     steps:
       - name: Download wheels from build job
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: pypi-wheels
           path: dist/

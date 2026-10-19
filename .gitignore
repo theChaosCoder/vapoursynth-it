@@ -35,6 +35,9 @@ venv/
 # Local venv used for VapourSynth smoke tests
 encode_test/
 
+# Benchmark reports from scripts/bench_vivtc.py (kept local)
+docs/benchmarks/
+
 # Reference build artifacts (when building the C++ upstream locally for golden hashes)
 reference/**/config.mak
 reference/**/config.log

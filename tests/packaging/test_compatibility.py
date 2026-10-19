@@ -2,6 +2,7 @@
 
 import ctypes as ct
 import platform
+import re
 import struct
 import sys
 import unittest
@@ -22,8 +23,12 @@ class BinaryCompatibilityTests(unittest.TestCase):
         for arch in ("x86_64", "aarch64"):
             with self.subTest(arch=arch):
                 data = (ROOT / f"zig-out/linux-{arch}/libzit.so").read_bytes()
-                self.assertIn(b"GLIBC_2.17\0", data)
-                newer = data.replace(b"GLIBC_2.17\0", b"GLIBC_2.28\0")
+                # Bump whatever the binary requires most, in place: which
+                # versions Zig links against varies with its release and arch.
+                versions = re.findall(rb"GLIBC_\d+(?:\.\d+)+(?=\0)", data)
+                self.assertTrue(versions, "no GLIBC_* symbol versions found")
+                highest = max(versions, key=lambda v: tuple(map(int, v[6:].split(b"."))))
+                newer = data.replace(highest + b"\0", re.sub(rb"\d", b"9", highest) + b"\0")
                 with self.assertRaisesRegex(ValueError, "newer than wheel tag"):
                     validate_binary(newer, f"manylinux2014_{arch}")
                 with self.assertRaisesRegex(ValueError, "newer than wheel tag"):

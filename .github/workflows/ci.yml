@@ -76,9 +76,10 @@ jobs:
           if-no-files-found: error
 
   # The VapourSynth PyPI wheel bundles both libvapoursynth.so and the
-  # vspipe binary on Linux, so a plain `pip install` is enough — no PPA
-  # dance or system VapourSynth required. The upstream-reference build
-  # is still best-effort because it needs system headers we don't have.
+  # vspipe binary on Linux, so a plain `pip install` is enough — no PPA needed.
+  #
+  # Independent of `build`: this job compiles its own host plugin in
+  # seconds, so it does not wait for the ten-minute cross build.
   integration:
     name: Integration tests
     runs-on: ubuntu-latest

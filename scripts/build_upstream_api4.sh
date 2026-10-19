@@ -14,7 +14,7 @@ cd "$DIR"
 # distros — explicitly clear it so we pick up the system headers only.
 unset PKG_CONFIG_PATH
 
-./configure --c --cxx=clang++ --extra-cxxflags='-std=c++17' >/dev/null
+./configure --c --cxx=clang++ --extra-cxxflags='-std=c++17'
 make -s clean
 make
 
